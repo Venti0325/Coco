@@ -18,6 +18,7 @@ from core import __version__
 from core.paths import config_home, data_home, ensure_dir
 from core.config import load_settings
 from core.models import AppSettings
+from core.llm import LLMClient
 from core import log
 
 
@@ -89,6 +90,16 @@ def entry() -> None:
         parser.error(str(exc))
 
     _print_startup(workspace, settings)
+
+    # 初始化 LLM 客户端（不发请求，仅完成本地构造与依赖检查）
+    try:
+        client = LLMClient.from_settings(settings)
+        log.success(f"  LLM 客户端就绪 ({client.provider.value})")
+    except Exception as exc:
+        log.error(f"  LLM 客户端初始化失败: {exc}")
+        sys.exit(1)
+
+    log.info("")
 
     if args.prompt:
         log.dim(f"[one-shot] {args.prompt}")

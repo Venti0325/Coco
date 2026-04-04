@@ -23,6 +23,7 @@ coco
 src/core/
   main.py      – CLI 入口
   config.py    – 分层配置加载（TOML / 环境变量 / CLI）
+  llm.py       – 统一 LLM 客户端（Anthropic / OpenAI 双后端）
   paths.py     – 集中路径约定
   models.py    – 共享数据模型与类型
   log.py       – 控制台输出助手
