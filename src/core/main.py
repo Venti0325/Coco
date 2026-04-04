@@ -29,6 +29,11 @@ _GREETING = """\
 """
 
 
+def _api_configured(settings: AppSettings) -> bool:
+    """是否已配置当前 provider 可用的 API 密钥（非空字符串）。"""
+    return bool((settings.api_key or "").strip())
+
+
 def _print_startup(workspace: Path, settings: AppSettings) -> None:
     """显示版本、路径与配置摘要。"""
     log.banner(_GREETING.format(ver=__version__))
@@ -43,11 +48,21 @@ def _print_startup(workspace: Path, settings: AppSettings) -> None:
     log.dim(f"  Config dir : {cfg_dir}")
     log.dim(f"  Data dir   : {dat_dir}")
     log.dim(f"  Workspace  : {workspace}")
-    log.dim(f"  Provider   : {settings.provider.value}")
-    log.dim(f"  Model      : {settings.model}")
-    log.dim(f"  Max tokens : {settings.max_tokens:,}")
-    if settings.effort:
-        log.dim(f"  Effort     : {settings.effort}")
+
+    if _api_configured(settings):
+        log.dim(f"  Provider   : {settings.provider.value}")
+        log.dim(f"  Model      : {settings.model}")
+        log.dim(f"  Max tokens : {settings.max_tokens:,}")
+        if settings.effort:
+            log.dim(f"  Effort     : {settings.effort}")
+    else:
+        log.warn(
+            "  API 密钥未配置：请设置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY，"
+            "或写入 .env / ~/.config/coco/config.toml / 项目 .coco.toml"
+        )
+        log.dim("  Provider   : 未配置")
+        log.dim("  Model      : 未配置")
+        log.dim("  Max tokens : 未配置")
     log.info("")
 
 
