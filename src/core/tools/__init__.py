@@ -1,6 +1,17 @@
-"""工具子系统：当前仅包含基础协议与示例实现。"""
+"""工具子系统：协议、示例与只读文件类工具。"""
 
 from .base import Tool, ToolOutcome, ToolSpec
 from .echo import EchoTool
+from .file_read import FileReadTool
+from .glob_tool import GlobTool
+from .grep_tool import GrepTool
 
-__all__ = ["Tool", "ToolOutcome", "ToolSpec", "EchoTool"]
+__all__ = [
+    "Tool",
+    "ToolOutcome",
+    "ToolSpec",
+    "EchoTool",
+    "FileReadTool",
+    "GlobTool",
+    "GrepTool",
+]

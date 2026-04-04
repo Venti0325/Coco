@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "coco"
 version = "0.1.0"
-description = "Coco · AI 结对编程助手"
+description = "Coco · 轻量化AI编程助手"
 requires-python = ">=3.10"
 dependencies = [
     "anthropic>=0.40.0",
