@@ -1,18 +1,23 @@
 """Coco CLI 入口。
 
-负责命令行参数解析与交互会话的引导启动。
-在引擎 / REPL 模块尚未实现前，入口函数仅输出启动诊断信息，
-以验证脚手架可正常运行。
+负责命令行参数解析、配置加载与交互会话的引导启动。
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
+# Windows 终端默认使用 GBK 编码，强制切换为 UTF-8 以正确显示中文
+if sys.platform == "win32":
+    os.environ.setdefault("PYTHONUTF8", "1")
+
 from core import __version__
 from core.paths import config_home, data_home, ensure_dir
+from core.config import load_settings
+from core.models import AppSettings
 from core import log
 
 
@@ -23,8 +28,8 @@ _GREETING = """\
 """
 
 
-def _print_startup(workspace: Path) -> None:
-    """显示版本、关键路径与当前工作区。"""
+def _print_startup(workspace: Path, settings: AppSettings) -> None:
+    """显示版本、路径与配置摘要。"""
     log.banner(_GREETING.format(ver=__version__))
 
     cfg_dir = config_home()
@@ -37,6 +42,11 @@ def _print_startup(workspace: Path) -> None:
     log.dim(f"  Config dir : {cfg_dir}")
     log.dim(f"  Data dir   : {dat_dir}")
     log.dim(f"  Workspace  : {workspace}")
+    log.dim(f"  Provider   : {settings.provider.value}")
+    log.dim(f"  Model      : {settings.model}")
+    log.dim(f"  Max tokens : {settings.max_tokens:,}")
+    if settings.effort:
+        log.dim(f"  Effort     : {settings.effort}")
     log.info("")
 
 
@@ -60,10 +70,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-tokens", type=int, help="每轮响应的最大输出 token 数")
     p.add_argument("--effort", choices=("low", "medium", "high"),
                    help="OpenAI 模型的推理力度")
-    p.add_argument("--resume", metavar="ID",
-                   help="通过 id 或序号恢复已保存的会话")
-    p.add_argument("--auto-approve", action="store_true",
-                   help="跳过权限确认提示（谨慎使用）")
+    # --resume / --auto-approve 将在会话与权限模块实现后加入
     return p
 
 
@@ -75,9 +82,14 @@ def entry() -> None:
     args = parser.parse_args()
 
     workspace = Path.cwd()
-    _print_startup(workspace)
 
-    # TODO(commit-2+): 加载配置 → 构建工具 → 启动引擎 → REPL 循环
+    try:
+        settings = load_settings(args, workspace=workspace)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    _print_startup(workspace, settings)
+
     if args.prompt:
         log.dim(f"[one-shot] {args.prompt}")
     else:

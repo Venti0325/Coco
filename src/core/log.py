@@ -6,10 +6,22 @@
 
 from __future__ import annotations
 
+import io
+import sys
+
 from rich.console import Console
 
+
+def _make_console() -> Console:
+    """创建全局 Console 实例，在 Windows 上强制 UTF-8 输出。"""
+    if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
+        stream = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        return Console(file=stream, highlight=False)
+    return Console(highlight=False)
+
+
 # 全局共享的 Console 实例 —— 其他模块统一从此处导入。
-_console = Console(highlight=False)
+_console = _make_console()
 
 
 def info(msg: str) -> None:
