@@ -6,9 +6,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
 
 # ── 供应商 / LLM ─────────────────────────────────────────────────────
@@ -41,20 +40,6 @@ class AppSettings:
     base_url: str | None = None
     max_tokens: int = 16_384
     effort: str | None = None          # low / medium / high（OpenAI 推理力度）
-
-
-# ── 工具执行结果 ──────────────────────────────────────────────────────
-
-@dataclass(slots=True)
-class ToolOutcome:
-    """工具执行后返回的结果。"""
-    content: str = ""
-    success: bool = True
-    meta: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def failed(self) -> bool:
-        return not self.success
 
 
 # ── Token 用量追踪 ────────────────────────────────────────────────────
