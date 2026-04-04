@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coco"
+version = "0.1.0"
+description = "Coco · AI 结对编程助手"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.40.0",
+    "openai>=1.0.0",
+    "prompt_toolkit>=3.0.0",
+    "rich>=13.0.0",
+    "python-dotenv>=1.0.0",
+    "tomli>=2.0.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+coco = "core.main:entry"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
