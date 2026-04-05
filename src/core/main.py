@@ -20,7 +20,14 @@ from core.config import load_settings
 from core.models import AppSettings
 from core.engine import Engine
 from core.llm import LLMClient
-from core.tools import FileReadTool, GlobTool, GrepTool
+from core.permissions import PermissionChecker
+from core.tools import (
+    FileEditTool,
+    FileReadTool,
+    FileWriteTool,
+    GlobTool,
+    GrepTool,
+)
 from core import log
 
 
@@ -88,7 +95,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-tokens", type=int, help="每轮响应的最大输出 token 数")
     p.add_argument("--effort", choices=("low", "medium", "high"),
                    help="OpenAI 模型的推理力度")
-    # --resume / --auto-approve 将在会话与权限模块实现后加入
+    p.add_argument(
+        "--auto-approve",
+        action="store_true",
+        help="跳过非只读工具（Write/Edit）的终端确认",
+    )
     return p
 
 
@@ -118,10 +129,19 @@ def entry() -> None:
 
     log.info("")
 
+    perms = PermissionChecker(auto_approve=args.auto_approve)
+
     def _run_query(text: str) -> None:
         engine = Engine(
             client,
-            [FileReadTool(), GlobTool(), GrepTool()],
+            [
+                FileReadTool(),
+                GlobTool(),
+                GrepTool(),
+                FileWriteTool(),
+                FileEditTool(),
+            ],
+            permissions=perms,
         )
         try:
             result = engine.run(text)

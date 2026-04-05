@@ -3,7 +3,7 @@
 * Anthropic：多轮 ``tool_use`` / ``tool_result``，硬上限防死循环。
 * OpenAI 兼容：单轮文本补全，不挂载 tools（本仓库尚未实现该路径的工具协议）。
 
-后续可在不改动本类对外形状的前提下接入 permissions、session、压缩等。
+后续可在不改动本类对外形状的前提下接入 session、压缩等。
 """
 
 from __future__ import annotations
@@ -12,18 +12,19 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from .llm import LLMClient, LLMResponse
+from .llm import LLMClient
 from .models import Provider, TokenUsage
+from .permissions import PermissionChecker
 from .tools.base import Tool
 
 _MAX_STEPS_DEFAULT = 6
 
 _SYSTEM = """You are Coco, a terminal coding assistant.
 
-You have read-only tools: Read (file contents), Glob (path patterns), Grep (regex search).
-Use them when you need facts from the repo; do not guess file contents.
+Tools: Read, Glob, Grep (read-only); Write (full file), Edit (unique old_string → new_string).
+Gather facts with Read/Glob/Grep before editing. Edit requires old_string to match exactly once.
 
-After tools return, answer the user clearly. Avoid redundant tool calls and endless loops."""
+After tools return, answer clearly. Avoid redundant calls and endless loops."""
 
 
 @dataclass
@@ -86,6 +87,7 @@ class Engine:
         *,
         max_steps: int = _MAX_STEPS_DEFAULT,
         system: str | None = None,
+        permissions: PermissionChecker | None = None,
     ) -> None:
         self._llm = llm
         self._tools = list(tools)
@@ -93,6 +95,7 @@ class Engine:
         self._max_steps = max(1, max_steps)
         self._system = system or _SYSTEM
         self._api_tools = _anthropic_tool_defs(self._tools)
+        self._permissions = permissions or PermissionChecker()
 
     def run(self, user_text: str) -> EngineResult:
         if self._llm.provider != Provider.ANTHROPIC:
@@ -143,6 +146,8 @@ class Engine:
                 tool = self._by_name.get(name)
                 if tool is None:
                     body = f"Error: unknown tool {name!r}"
+                elif not tool.is_read_only and self._permissions.check(tool, inp) == "deny":
+                    body = "Error: User denied permission to run this tool."
                 else:
                     out = tool.invoke(inp)
                     body = (
