@@ -1,7 +1,7 @@
 """最小可运行的工具循环引擎（MVP）。
 
-* Anthropic：多轮 ``tool_use`` / ``tool_result``，硬上限防死循环。
-* OpenAI 兼容：单轮文本补全，不挂载 tools（本仓库尚未实现该路径的工具协议）。
+Anthropic 与 **OpenAI 兼容**（含 DashScope / Qwen 等）共用同一套内部消息与工具循环；
+后者由 ``llm`` 在请求前转换为 Chat Completions 格式。
 
 后续可在不改动本类对外形状的前提下接入 session、压缩等。
 """
@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from .llm import LLMClient
-from .models import Provider, TokenUsage
+from .models import TokenUsage
 from .permissions import PermissionChecker
 from .tools.base import Tool
 
@@ -98,20 +98,9 @@ class Engine:
         self._permissions = permissions or PermissionChecker()
 
     def run(self, user_text: str) -> EngineResult:
-        if self._llm.provider != Provider.ANTHROPIC:
-            return self._run_openai_text_only(user_text)
-        return self._run_anthropic_loop(user_text)
+        return self._run_tool_loop(user_text)
 
-    def _run_openai_text_only(self, user_text: str) -> EngineResult:
-        messages = [{"role": "user", "content": user_text}]
-        resp = self._llm.complete(messages=messages, system=self._system, tools=None)
-        return EngineResult(
-            answer=_text_from_blocks(resp.content),
-            tool_log=[],
-            usage=resp.usage,
-        )
-
-    def _run_anthropic_loop(self, user_text: str) -> EngineResult:
+    def _run_tool_loop(self, user_text: str) -> EngineResult:
         messages: list[dict] = [{"role": "user", "content": user_text}]
         tool_log: list[str] = []
         usage_acc: TokenUsage | None = None

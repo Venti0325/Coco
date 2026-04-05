@@ -3,20 +3,15 @@
 负责按配置构造各 provider 的 SDK 客户端、发起流式请求、
 提取用量与做基础错误分类。
 
-Anthropic：支持 ``tools`` 与响应中的 ``tool_use`` 块归一化，供 engine 工具循环使用。
-OpenAI 兼容端：仍仅为文本型 messages + 流式/聚合；多轮工具协议未接，由 engine 单轮兜底。
-
-核心设计：策略模式 —— LLMClient 委托给 _AnthropicBackend 或
-_OpenAIBackend；公开 API 不显式分支 provider。
-
-后续在 engine 接入工具循环时，将在此层或邻接模块补充例如
-``_to_openai_messages``、``_user_blocks_to_openai``、
-``_content_to_text``、``_tool_to_openai`` 等归一化逻辑；
-当前仅占位说明，避免与未实现的 agent 链路混淆。
+* **Anthropic**：Messages API；内部块为 text / tool_use / tool_result。
+* **OpenAI 兼容**（官方 API、阿里云 DashScope、Qwen 兼容模式等）：Chat Completions；
+  在库内将上述块转为 ``tool_calls`` / ``role: tool``，与 engine 共用同一消息形状
+  （对齐原 coco ``llm.py`` 的做法）。
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Iterator
 
@@ -42,10 +37,7 @@ except ImportError:
 class LLMResponse:
     """一次 LLM 调用的聚合结果（流式结束后的快照）。
 
-    当前仅走纯文本对话路径，``content`` 一般为文本块列表。
-    将来接入工具循环后，可在此扩展与 Anthropic 块结构对齐的
-    ``tool_use`` 等字段；那时会配合独立的消息协议转换函数实现，
-    而不是在本 commit 阶段一次性铺齐。
+    ``content`` 为归一化块列表：``text``、``tool_use``（两后端统一成此形状）。
     """
     content: list[dict[str, Any]]
     usage: TokenUsage | None = None
@@ -144,16 +136,14 @@ class _AnthropicBackend:
 # ══════════════════════════════════════════════════════════════════════
 
 class _OpenAIStream:
-    """OpenAI 兼容 API 流式响应包装（仅文本 delta + usage）。
-
-    工具调用的增量解析与跨格式归一化推迟到 engine 阶段再实现。
-    """
+    """OpenAI 兼容 API 流式：文本 delta + tool_calls 增量，结束时归一为内部 content 块。"""
 
     def __init__(self, client, params: dict):
         self._client = client
         self._params = params
         self._stream = None
         self._text_parts: list[str] = []
+        self._tool_calls: dict[int, dict[str, Any]] = {}
         self._usage: TokenUsage | None = None
         self.text_stream: Iterator[str] = iter(())
 
@@ -171,7 +161,6 @@ class _OpenAIStream:
             self._stream.close()
 
     def _iter_chunks(self) -> Iterator[str]:
-        """逐 chunk 解析，yield 文本片段并记录用量。"""
         for chunk in self._stream:
             usage_raw = getattr(chunk, "usage", None)
             if usage_raw is not None:
@@ -184,12 +173,40 @@ class _OpenAIStream:
                     self._text_parts.append(text)
                     yield text
 
+                for tc in _attr(delta, "tool_calls", []) or []:
+                    idx = int(_attr(tc, "index", 0) or 0)
+                    entry = self._tool_calls.setdefault(
+                        idx, {"id": "", "name": "", "arguments": ""},
+                    )
+                    tc_id = _attr(tc, "id")
+                    if tc_id:
+                        entry["id"] = tc_id
+                    fn = _attr(tc, "function", {}) or {}
+                    name = _attr(fn, "name")
+                    if name:
+                        entry["name"] = name
+                    arg_chunk = _attr(fn, "arguments")
+                    if arg_chunk:
+                        entry["arguments"] += arg_chunk
+
     def get_final_message(self) -> LLMResponse:
-        """流结束后，汇总文本块与 token 用量。"""
+        content: list[dict[str, Any]] = []
         text = "".join(self._text_parts)
-        content: list[dict[str, Any]] = (
-            [{"type": "text", "text": text}] if text else []
-        )
+        if text:
+            content.append({"type": "text", "text": text})
+        for idx in sorted(self._tool_calls):
+            tc = self._tool_calls[idx]
+            raw = (tc.get("arguments") or "").strip()
+            try:
+                parsed: Any = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                parsed = {}
+            content.append({
+                "type": "tool_use",
+                "id": tc.get("id", ""),
+                "name": tc.get("name", ""),
+                "input": parsed if isinstance(parsed, dict) else {},
+            })
         return LLMResponse(content=content, usage=self._usage)
 
 
@@ -209,12 +226,17 @@ class _OpenAIBackend:
     def stream(
         self, *, model: str, max_tokens: int,
         messages: list[dict], system: str | None = None,
+        tools: list[dict] | None = None,
         effort: str | None = None, **_kw,
     ) -> _OpenAIStream:
-        params = _build_openai_params(
-            model=model, max_tokens=max_tokens,
-            system=system, messages=messages,
-            effort=effort, stream=True,
+        params = _build_openai_chat_request(
+            model=model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=messages,
+            tools=tools or [],
+            effort=effort,
+            stream=True,
         )
         return _OpenAIStream(self._client, params)
 
@@ -248,8 +270,8 @@ class _OpenAIBackend:
 class LLMClient:
     """统一 LLM 客户端（构造 + 流式传输 + 错误分类）。
 
-    通过策略模式将调用给具体后端。Anthropic 下可传 ``tools``；
-    OpenAI 后端当前仍按纯文本 messages 请求（不传 tools）。
+    通过策略模式将调用给具体后端。Anthropic 与 OpenAI 兼容路径均可传 ``tools``；
+    engine 使用统一的内部消息格式，OpenAI 侧在 ``_to_openai_messages`` 中转换。
 
     典型用法::
 
@@ -290,14 +312,14 @@ class LLMClient:
         - .close()
         - .get_final_message() -> LLMResponse
 
-        ``tools`` 仅 Anthropic 后端会下发；OpenAI 路径忽略。
+        Anthropic / OpenAI 均会携带 ``tools``（若提供）。
         """
         return self._backend.stream(
             model=self._settings.model,
             max_tokens=self._settings.max_tokens,
             messages=messages,
             system=system,
-            tools=tools if self._settings.provider == Provider.ANTHROPIC else None,
+            tools=tools,
             effort=self._settings.effort,
         )
 
@@ -381,32 +403,145 @@ def _extract_openai_usage(raw: Any) -> TokenUsage | None:
     )
 
 
-# ── OpenAI 请求构建（最小版本：system + 纯文本 messages）──────────────
-#
-# 跨 provider 的 tool_use / tool_result / 多模态等映射（例如
-# _to_openai_messages、_user_blocks_to_openai、_content_to_text、
-# _tool_to_openai）计划在 engine 阶段实现，此处刻意保持单薄。
+# ── OpenAI 兼容：内部消息（类 Anthropic）→ Chat Completions ────────────
 
-def _build_openai_params(
-    *, model: str, max_tokens: int, system: str | None,
-    messages: list[dict], effort: str | None, stream: bool,
+
+def _openai_supports_reasoning_effort(model: str) -> bool:
+    m = model.lower()
+    return m.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def _build_openai_chat_request(
+    *,
+    model: str,
+    max_tokens: int,
+    system: str | None,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    effort: str | None,
+    stream: bool,
 ) -> dict[str, Any]:
-    """构建 OpenAI 兼容 API 请求参数（仅文本）。"""
-    oai_msgs: list[dict[str, Any]] = []
-    if system:
-        oai_msgs.append({"role": "system", "content": system})
-    for msg in messages:
-        oai_msgs.append({
-            "role": msg.get("role", "user"),
-            "content": msg.get("content", ""),
-        })
-
     params: dict[str, Any] = {
         "model": model,
-        "messages": oai_msgs,
+        "messages": _to_openai_messages(system, messages),
         "max_tokens": max_tokens,
         "stream": stream,
     }
-    # effort 等扩展字段留待 engine 或按模型分支接入
-    _ = effort
+    if tools:
+        params["tools"] = [_tool_schema_to_openai(t) for t in tools]
+    if effort and _openai_supports_reasoning_effort(model):
+        params["reasoning_effort"] = effort
     return params
+
+
+def _tool_schema_to_openai(tool: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.get("name", ""),
+            "description": tool.get("description", ""),
+            "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
+        },
+    }
+
+
+def _tool_result_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if content is None:
+        return ""
+    return json.dumps(content, ensure_ascii=False)
+
+
+def _user_content_blocks_to_openai(content: list[Any]) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type")
+        if btype == "text":
+            parts.append({"type": "text", "text": block.get("text", "")})
+        elif btype == "image":
+            source = block.get("source", {}) or {}
+            media_type = source.get("media_type", "image/png")
+            data = source.get("data", "")
+            parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{data}"},
+            })
+    if not parts:
+        return [{"type": "text", "text": ""}]
+    return parts
+
+
+def _to_openai_messages(
+    system: str | None,
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if system:
+        out.append({"role": "system", "content": system})
+
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content", "")
+
+        if role == "user" and isinstance(content, list):
+            tool_results = [
+                b
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "tool_result"
+            ]
+            if tool_results and len(tool_results) == len(content):
+                for block in tool_results:
+                    out.append({
+                        "role": "tool",
+                        "tool_call_id": block.get("tool_use_id", ""),
+                        "content": _tool_result_to_text(block.get("content", "")),
+                    })
+                continue
+
+            out.append({
+                "role": "user",
+                "content": _user_content_blocks_to_openai(content),
+            })
+            continue
+
+        if role == "assistant" and isinstance(content, list):
+            text_parts: list[str] = []
+            tool_calls: list[dict[str, Any]] = []
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type")
+                if btype == "text":
+                    text_parts.append(block.get("text", ""))
+                elif btype == "tool_use":
+                    tool_calls.append({
+                        "id": block.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": block.get("name", ""),
+                            "arguments": json.dumps(
+                                block.get("input", {}),
+                                ensure_ascii=False,
+                            ),
+                        },
+                    })
+            text_joined = "".join(text_parts)
+            assistant_msg: dict[str, Any] = {"role": "assistant"}
+            if tool_calls:
+                assistant_msg["tool_calls"] = tool_calls
+                # 部分 OpenAI 兼容网关（如部分 Qwen 部署）不接受 null content
+                assistant_msg["content"] = text_joined or ""
+            else:
+                assistant_msg["content"] = text_joined
+            out.append(assistant_msg)
+            continue
+
+        out.append({
+            "role": role,
+            "content": content,
+        })
+
+    return out
