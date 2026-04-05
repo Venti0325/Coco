@@ -18,6 +18,7 @@ from core import __version__
 from core.paths import config_home, data_home, ensure_dir
 from core.config import load_settings
 from core.models import AppSettings
+from core.commands import CommandContext, ReplState, dispatch_slash
 from core.engine import Engine
 from core.session import SessionStore
 from core.llm import LLMClient
@@ -202,9 +203,19 @@ def entry() -> None:
         else:
             session_store = SessionStore(workspace, settings.model)
 
-        log.dim("交互模式 — /history /resume /clear；exit 或 quit 退出")
+        log.dim("交互模式 — /help；exit 或 quit 退出")
         log.dim(f"  当前会话 ID: {session_store.session_id}")
         log.info("")
+
+        repl_state = ReplState(
+            chat_messages=chat_messages,
+            session_store=session_store,
+        )
+        cmd_ctx = CommandContext(
+            workspace=workspace,
+            settings=settings,
+            state=repl_state,
+        )
 
         while True:
             try:
@@ -218,67 +229,22 @@ def entry() -> None:
             if low in ("exit", "quit"):
                 break
 
-            if text.startswith("/"):
-                parts = text.split(maxsplit=1)
-                cmd = parts[0].lower()
-                arg = parts[1].strip() if len(parts) > 1 else ""
-
-                if cmd == "/clear":
-                    chat_messages.clear()
-                    session_store = SessionStore(workspace, settings.model)
-                    log.info("已开始新会话。")
-                    log.dim(f"  新会话 ID: {session_store.session_id}")
-                    continue
-
-                if cmd == "/history":
-                    lst = SessionStore.list_sessions(workspace)
-                    if not lst:
-                        log.dim("  （当前工作区暂无已保存会话）")
-                    else:
-                        for i, m in enumerate(lst, start=1):
-                            sid_short = m.session_id[:12] + "…"
-                            log.dim(
-                                f"  {i}. [{sid_short}] {m.title} · {m.message_count} 条"
-                            )
-                    continue
-
-                if cmd == "/resume":
-                    if not arg:
-                        log.warn("用法: /resume <序号或 session_id>")
-                        continue
-                    lst = SessionStore.list_sessions(workspace)
-                    sid: str | None = None
-                    if arg.isdigit():
-                        idx = int(arg) - 1
-                        if 0 <= idx < len(lst):
-                            sid = lst[idx].session_id
-                    else:
-                        sid = arg
-                    if sid is None:
-                        log.warn("序号无效。")
-                        continue
-                    _m, msgs = SessionStore.load_session(sid, workspace)
-                    if not msgs and _m is None:
-                        log.warn("无法加载该会话。")
-                        continue
-                    chat_messages.clear()
-                    chat_messages.extend(msgs)
-                    session_store = SessionStore(
-                        workspace, settings.model, session_id=sid
-                    )
-                    log.info(
-                        f"已切换会话 {sid[:12]}…（{len(msgs)} 条消息）"
-                    )
-                    continue
-
-                log.warn(f"未知命令: {cmd}（试试 /history /resume /clear）")
+            rc = dispatch_slash(cmd_ctx, text)
+            if rc == "exit":
+                break
+            if rc == "handled":
+                log.info("")
+                continue
+            if rc == "unknown":
+                log.warn("未知命令，输入 /help 查看列表。")
+                log.info("")
                 continue
 
             _run_query(
                 _make_engine(),
                 text,
-                chat_messages=chat_messages,
-                session_store=session_store,
+                chat_messages=repl_state.chat_messages,
+                session_store=repl_state.session_store,
             )
             log.info("")
 
