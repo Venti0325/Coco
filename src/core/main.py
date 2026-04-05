@@ -19,6 +19,7 @@ from core.paths import config_home, data_home, ensure_dir
 from core.config import load_settings
 from core.models import AppSettings
 from core.commands import CommandContext, ReplState, dispatch_slash
+from core.context import build_system_prompt
 from core.engine import Engine
 from core.session import SessionStore
 from core.llm import LLMClient
@@ -137,6 +138,7 @@ def entry() -> None:
     log.info("")
 
     perms = PermissionChecker(auto_approve=args.auto_approve)
+    system_prompt = build_system_prompt(workspace)
 
     def _make_engine() -> Engine:
         return Engine(
@@ -148,6 +150,7 @@ def entry() -> None:
                 FileWriteTool(),
                 FileEditTool(),
             ],
+            system=system_prompt,
             permissions=perms,
         )
 
