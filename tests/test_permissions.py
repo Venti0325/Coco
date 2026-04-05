@@ -1,4 +1,4 @@
-"""最小 PermissionChecker（对齐 coco 行为，适配 ``spec.name`` / ``_prompt``）。"""
+"""`PermissionChecker` 行为测试。"""
 
 from __future__ import annotations
 

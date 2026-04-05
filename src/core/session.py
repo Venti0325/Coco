@@ -1,4 +1,4 @@
-"""会话持久化：按工作区隔离的 JSONL + 轻量 meta（对齐 coco / claude-code 思路）。"""
+"""会话持久化：按工作区隔离的 JSONL 与轻量 meta 文件。"""
 
 from __future__ import annotations
 

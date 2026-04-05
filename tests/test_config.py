@@ -1,4 +1,4 @@
-"""配置合并与推断（对齐 coco 的 test_config 思路，适配 ``load_settings``）。"""
+"""`load_settings` 与 max_tokens 推断相关测试。"""
 
 from __future__ import annotations
 

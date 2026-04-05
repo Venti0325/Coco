@@ -5,8 +5,7 @@
 
 * **Anthropic**：Messages API；内部块为 text / tool_use / tool_result。
 * **OpenAI 兼容**（官方 API、阿里云 DashScope、Qwen 兼容模式等）：Chat Completions；
-  在库内将上述块转为 ``tool_calls`` / ``role: tool``，与 engine 共用同一消息形状
-  （对齐原 coco ``llm.py`` 的做法）。
+  在库内将上述块转为 ``tool_calls`` / ``role: tool``，与 engine 共用同一内部消息形状。
 """
 
 from __future__ import annotations

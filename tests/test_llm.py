@@ -1,4 +1,4 @@
-"""OpenAI 兼容消息转换（与 coco test_llm 同源，函数名随 Coco_plus）。"""
+"""OpenAI 兼容消息转换"""
 
 from __future__ import annotations
 

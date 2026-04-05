@@ -1,6 +1,6 @@
-"""斜杠命令：解析、分发（精简版，对齐 coco 的扩展方式）。
+"""斜杠命令：解析与分发。
 
-后续可在此注册 /compact、/model 等，无需把分支堆在 main 里。
+在 ``_COMMANDS`` 中注册即可扩展新命令。
 """
 
 from __future__ import annotations

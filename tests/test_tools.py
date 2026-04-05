@@ -1,4 +1,4 @@
-"""只读 / 写入工具（Coco_plus 使用 ``invoke`` + ``ToolOutcome``）。"""
+"""只读 / 写入工具。"""
 
 from __future__ import annotations
 
