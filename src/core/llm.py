@@ -1,8 +1,10 @@
 """Coco 统一 LLM 客户端（传输层）。
 
 负责按配置构造各 provider 的 SDK 客户端、发起流式请求、
-提取用量与做基础错误分类。主流程尚未接入 tools / engine，
-因而不在此展开「跨 provider 的多轮工具消息协议」映射。
+提取用量与做基础错误分类。
+
+Anthropic：支持 ``tools`` 与响应中的 ``tool_use`` 块归一化，供 engine 工具循环使用。
+OpenAI 兼容端：仍仅为文本型 messages + 流式/聚合；多轮工具协议未接，由 engine 单轮兜底。
 
 核心设计：策略模式 —— LLMClient 委托给 _AnthropicBackend 或
 _OpenAIBackend；公开 API 不显式分支 provider。
@@ -104,7 +106,8 @@ class _AnthropicBackend:
 
     def stream(
         self, *, model: str, max_tokens: int,
-        messages: list[dict], system: str | None = None, **_kw,
+        messages: list[dict], system: str | None = None,
+        tools: list[dict] | None = None, **_kw,
     ) -> _AnthropicStream:
         kwargs: dict[str, Any] = {
             "model": model,
@@ -113,6 +116,8 @@ class _AnthropicBackend:
         }
         if system:
             kwargs["system"] = system
+        if tools:
+            kwargs["tools"] = tools
         return _AnthropicStream(self._client.messages.stream(**kwargs))
 
     # ── 错误分类 ──────────────────────────────────────────────────────
@@ -243,8 +248,8 @@ class _OpenAIBackend:
 class LLMClient:
     """统一 LLM 客户端（构造 + 流式传输 + 错误分类）。
 
-    通过策略模式将调用委托给具体后端。当前 ``stream()`` 仅支持
-    纯文本消息；工具定义与多轮工具结果格式将在 engine 接入后再扩展。
+    通过策略模式将调用给具体后端。Anthropic 下可传 ``tools``；
+    OpenAI 后端当前仍按纯文本 messages 请求（不传 tools）。
 
     典型用法::
 
@@ -276,6 +281,7 @@ class LLMClient:
         self, *,
         messages: list[dict[str, Any]],
         system: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ):
         """发起流式请求，返回上下文管理器。
 
@@ -284,15 +290,31 @@ class LLMClient:
         - .close()
         - .get_final_message() -> LLMResponse
 
-        消息体为各后端约定的最小形状：``role`` + 字符串 ``content``。
+        ``tools`` 仅 Anthropic 后端会下发；OpenAI 路径忽略。
         """
         return self._backend.stream(
             model=self._settings.model,
             max_tokens=self._settings.max_tokens,
             messages=messages,
             system=system,
+            tools=tools if self._settings.provider == Provider.ANTHROPIC else None,
             effort=self._settings.effort,
         )
+
+    def complete(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        system: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> LLMResponse:
+        """消费完整流并返回最终消息（engine 一轮调用）。"""
+        with self.stream(
+            messages=messages, system=system, tools=tools,
+        ) as stream:
+            for _ in stream.text_stream:
+                pass
+            return stream.get_final_message()
 
     def is_auth_error(self, exc: Exception) -> bool:
         """判断是否为认证错误（API key 无效等）。"""
@@ -319,16 +341,19 @@ class LLMClient:
 # ── Anthropic 内容规范化 ──────────────────────────────────────────────
 
 def _normalize_anthropic_content(raw: Any) -> list[dict[str, Any]]:
-    """将 Anthropic SDK 返回的 content 中的文本块转为 dict 列表。
-
-    ``tool_use`` / 多模态等块的归一化推迟到启用工具循环之后；
-    当前请求不传 ``tools``，响应侧亦只期望文本块。
-    """
+    """将 Anthropic SDK 的 content 块转为 dict 列表（text + tool_use）。"""
     blocks: list[dict[str, Any]] = []
     for block in raw or []:
         btype = _attr(block, "type")
         if btype == "text":
             blocks.append({"type": "text", "text": _attr(block, "text", "")})
+        elif btype == "tool_use":
+            blocks.append({
+                "type": "tool_use",
+                "id": _attr(block, "id", ""),
+                "name": _attr(block, "name", ""),
+                "input": _attr(block, "input", {}) or {},
+            })
     return blocks
 
 

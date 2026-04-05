@@ -18,7 +18,9 @@ from core import __version__
 from core.paths import config_home, data_home, ensure_dir
 from core.config import load_settings
 from core.models import AppSettings
+from core.engine import Engine
 from core.llm import LLMClient
+from core.tools import FileReadTool, GlobTool, GrepTool
 from core import log
 
 
@@ -116,10 +118,46 @@ def entry() -> None:
 
     log.info("")
 
+    def _run_query(text: str) -> None:
+        engine = Engine(
+            client,
+            [FileReadTool(), GlobTool(), GrepTool()],
+        )
+        try:
+            result = engine.run(text)
+        except Exception as exc:
+            log.error(f"请求失败: {LLMClient.error_message(exc)}")
+            return
+        for line in result.tool_log:
+            log.dim(line)
+        if args.print_mode:
+            print(result.answer, end="" if result.answer.endswith("\n") else "\n")
+        else:
+            log.info(result.answer)
+
     if args.prompt:
-        log.dim(f"[one-shot] {args.prompt}")
+        if not _api_configured(settings):
+            log.error("需要配置 API 密钥后才能执行 one-shot 请求。")
+            sys.exit(1)
+        _run_query(args.prompt)
     else:
-        log.dim("交互模式尚未实现，敬请期待！")
+        if not _api_configured(settings):
+            log.error("需要配置 API 密钥；配置后可交互输入，或传入 prompt 参数。")
+            sys.exit(1)
+        log.dim("交互模式 — 输入问题后回车，exit / quit 或 Ctrl+D 退出")
+        log.info("")
+        while True:
+            try:
+                line = input("> ")
+            except EOFError:
+                break
+            text = line.strip()
+            if not text:
+                continue
+            if text.lower() in ("exit", "quit"):
+                break
+            _run_query(text)
+            log.info("")
 
 
 if __name__ == "__main__":
