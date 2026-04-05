@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 from pathlib import Path
 
 # ── 应用级目录 ────────────────────────────────────────────────────────
@@ -52,11 +54,20 @@ def history_file() -> Path:
     return state_home() / "history"
 
 
+def _sanitize_workspace_path(resolved: str) -> str:
+    """将绝对工作区路径变为安全的目录名（避免同名不同路径冲突）。"""
+    name = re.sub(r"[^a-zA-Z0-9]", "-", resolved)
+    name = re.sub(r"-+", "-", name).strip("-")
+    if len(name) > 80:
+        h = hashlib.sha1(resolved.encode("utf-8", errors="replace")).hexdigest()[:8]
+        name = name[:80] + "-" + h
+    return name or "root"
+
+
 def sessions_dir(workspace: Path | None = None) -> Path:
-    """按工作区隔离的会话存储目录。"""
-    root = workspace or Path.cwd()
-    slug = root.name or "root"
-    return data_home() / "sessions" / slug
+    """按工作区（解析后的绝对路径）隔离的会话存储目录。"""
+    root = (workspace or Path.cwd()).resolve()
+    return data_home() / "sessions" / _sanitize_workspace_path(str(root))
 
 
 def project_instructions_file(workspace: Path | None = None) -> Path | None:

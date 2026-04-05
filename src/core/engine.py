@@ -3,7 +3,7 @@
 Anthropic 与 **OpenAI 兼容**（含 DashScope / Qwen 等）共用同一套内部消息与工具循环；
 后者由 ``llm`` 在请求前转换为 Chat Completions 格式。
 
-后续可在不改动本类对外形状的前提下接入 session、压缩等。
+支持 ``prior_messages`` 与返回完整 ``messages`` 供会话持久化；压缩等后续再接。
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ class EngineResult:
     answer: str
     tool_log: list[str] = field(default_factory=list)
     usage: TokenUsage | None = None
+    messages: list[dict] = field(default_factory=list)
 
 
 def _anthropic_tool_defs(tools: Sequence[Tool]) -> list[dict]:
@@ -97,11 +98,23 @@ class Engine:
         self._api_tools = _anthropic_tool_defs(self._tools)
         self._permissions = permissions or PermissionChecker()
 
-    def run(self, user_text: str) -> EngineResult:
-        return self._run_tool_loop(user_text)
+    def run(
+        self,
+        user_text: str,
+        *,
+        prior_messages: list[dict] | None = None,
+    ) -> EngineResult:
+        return self._run_tool_loop(user_text, prior_messages=prior_messages)
 
-    def _run_tool_loop(self, user_text: str) -> EngineResult:
-        messages: list[dict] = [{"role": "user", "content": user_text}]
+    def _run_tool_loop(
+        self,
+        user_text: str,
+        *,
+        prior_messages: list[dict] | None = None,
+    ) -> EngineResult:
+        messages: list[dict] = list(prior_messages or []) + [
+            {"role": "user", "content": user_text}
+        ]
         tool_log: list[str] = []
         usage_acc: TokenUsage | None = None
 
@@ -116,10 +129,12 @@ class Engine:
             tool_blocks = [b for b in blocks if b.get("type") == "tool_use"]
 
             if not tool_blocks:
+                messages.append({"role": "assistant", "content": blocks})
                 return EngineResult(
                     answer=_text_from_blocks(blocks),
                     tool_log=tool_log,
                     usage=usage_acc,
+                    messages=messages,
                 )
 
             messages.append({"role": "assistant", "content": blocks})
@@ -156,8 +171,16 @@ class Engine:
 
             messages.append({"role": "user", "content": result_blocks})
 
+        answer = "（已达到工具调用轮次上限，请缩短问题或拆分步骤。）"
+        messages.append(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": answer}],
+            }
+        )
         return EngineResult(
-            answer="（已达到工具调用轮次上限，请缩短问题或拆分步骤。）",
+            answer=answer,
             tool_log=tool_log,
             usage=usage_acc,
+            messages=messages,
         )

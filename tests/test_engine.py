@@ -63,6 +63,9 @@ def test_engine_text_only_answer():
     result = eng.run("hi")
     assert result.answer == "final answer"
     assert result.tool_log == []
+    assert len(result.messages) == 2
+    assert result.messages[0]["role"] == "user"
+    assert result.messages[1]["role"] == "assistant"
 
 
 def test_engine_one_tool_then_text():
@@ -89,6 +92,28 @@ def test_engine_one_tool_then_text():
     result = eng.run("call echo")
     assert "Echo" in "".join(result.tool_log)
     assert result.answer == "done"
+    assert result.messages[-1]["role"] == "assistant"
+
+
+def test_engine_prior_messages_continues_thread():
+    llm = _make_llm_mock(
+        [
+            LLMResponse(
+                content=[{"type": "text", "text": "second"}],
+            )
+        ]
+    )
+    prior = [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+    ]
+    eng = Engine(llm, [EchoTool()], permissions=PermissionChecker(auto_approve=True))
+    result = eng.run("follow up", prior_messages=prior)
+    assert result.answer == "second"
+    assert result.messages[0] == prior[0]
+    assert result.messages[1] == prior[1]
+    assert result.messages[2]["role"] == "user"
+    assert result.messages[3]["role"] == "assistant"
 
 
 def test_engine_permission_deny_skips_invoke():
@@ -115,3 +140,4 @@ def test_engine_permission_deny_skips_invoke():
         result = eng.run("x")
     m_check.assert_called()
     assert result.answer == "ok"
+    assert result.messages[-1]["role"] == "assistant"
