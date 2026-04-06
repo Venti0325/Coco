@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.compact import estimate_tokens, _split_recent, CompactService
+from core.compact import estimate_tokens, _split_recent, CompactService, should_compact_by_message_count
 from core.llm import LLMResponse
 
 
@@ -17,6 +17,12 @@ def test_split_recent_returns_all_when_short():
     hist, recent = _split_recent(msgs)
     assert hist == []
     assert recent == msgs
+
+
+def test_should_compact_by_message_count_includes_incoming():
+    msgs = [{"role": "user", "content": "x"}] * 20
+    assert should_compact_by_message_count(msgs, incoming_messages=1, limit=20) is True
+    assert should_compact_by_message_count(msgs, incoming_messages=0, limit=20) is False
 
 
 def test_compact_service_replaces_history_with_summary():

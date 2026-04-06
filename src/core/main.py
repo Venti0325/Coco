@@ -19,7 +19,7 @@ from core.paths import config_home, data_home, ensure_dir
 from core.config import load_settings
 from core.models import AppSettings
 from core.commands import CommandContext, ReplState, dispatch_slash
-from core.compact import CompactService
+from core.compact import AUTO_COMPACT_MESSAGE_LIMIT, CompactService, should_compact_by_message_count
 from core.context import build_system_prompt
 from core.engine import Engine
 from core.session import SessionStore
@@ -183,6 +183,41 @@ def entry() -> None:
         chat_messages.extend(result.messages)
         return True
 
+    def _auto_compact_if_needed(
+        *,
+        incoming_user_text: str,
+        chat_messages: list,
+        session_store: SessionStore | None,
+    ) -> None:
+        # “含本次输入”口径：历史消息条数 + 1（当前用户输入）超过阈值则先压缩历史
+        if not should_compact_by_message_count(
+            chat_messages,
+            incoming_messages=1,
+            limit=AUTO_COMPACT_MESSAGE_LIMIT,
+        ):
+            return
+        if session_store is None:
+            return
+        _ = incoming_user_text
+        try:
+            new_msgs, _summary = compact_service.compact(
+                list(chat_messages),
+                system_prompt=system_prompt,
+                custom_instructions="",
+            )
+        except Exception as exc:
+            log.warn(f"自动压缩失败：{exc}")
+            return
+
+        before = len(chat_messages)
+        chat_messages.clear()
+        chat_messages.extend(new_msgs)
+        try:
+            session_store.save_transcript(new_msgs)
+        except Exception:
+            pass
+        log.dim(f"已自动压缩对话：{before} → {len(new_msgs)} 条消息")
+
     if args.prompt:
         if not _api_configured(settings):
             log.error("需要配置 API 密钥后才能执行 one-shot 请求。")
@@ -248,6 +283,12 @@ def entry() -> None:
                 log.warn("未知命令，输入 /help 查看列表。")
                 log.info("")
                 continue
+
+            _auto_compact_if_needed(
+                incoming_user_text=text,
+                chat_messages=repl_state.chat_messages,
+                session_store=repl_state.session_store,
+            )
 
             _run_query(
                 _make_engine(),

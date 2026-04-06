@@ -16,6 +16,9 @@ MIN_RECENT_TOKENS = 10_000
 
 COMPACT_MAX_OUTPUT_TOKENS = 4096  # 仅用于说明；当前实现使用 LLMClient 默认 max_tokens
 
+# 自动压缩（按消息条数触发）：含本次输入后消息总数超过该阈值则触发
+AUTO_COMPACT_MESSAGE_LIMIT = 20
+
 COMPACT_PROMPT = """\
 Please provide a detailed summary of our conversation so far. This summary will \
 replace earlier messages to free up context space, so it must preserve every \
@@ -77,6 +80,29 @@ def estimate_tokens(messages: list[dict]) -> int:
     for msg in messages:
         total_chars += len(_text_of(msg.get("content", "")))
     return total_chars // CHARS_PER_TOKEN
+
+
+def should_compact_by_message_count(
+    messages: list[dict],
+    *,
+    incoming_messages: int = 0,
+    limit: int = AUTO_COMPACT_MESSAGE_LIMIT,
+) -> bool:
+    """按消息条数决定是否需要压缩。
+
+    用户侧常见的“超过 N 条就 compact”需求不依赖 token 估算，适用于无用量回传的后端。
+    """
+    try:
+        inc = int(incoming_messages)
+    except Exception:
+        inc = 0
+    try:
+        lim = int(limit)
+    except Exception:
+        lim = AUTO_COMPACT_MESSAGE_LIMIT
+    if lim < 1:
+        lim = AUTO_COMPACT_MESSAGE_LIMIT
+    return (len(messages) + max(0, inc)) > lim
 
 
 def _strip_media(messages: list[dict]) -> list[dict]:
