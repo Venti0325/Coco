@@ -5,7 +5,7 @@ Skill 以 Markdown 文件存在，支持 YAML 风格 frontmatter（极简解析�
 来源（按约定目录）：
 - 内置（bundled）：代码内注册
 - 项目级（project）：`<workspace>/.coco/skills/<name>/SKILL.md`
-- 用户级（user）：`~/.coco/skills/<name>/SKILL.md`
+- 用户级（user）：用户目录下的 `.coco/skills/<name>/SKILL.md`
 """
 
 from __future__ import annotations

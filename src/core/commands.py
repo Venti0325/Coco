@@ -125,6 +125,62 @@ def _cmd_resume(ctx: CommandContext, args: str) -> None:
     log.info(f"已切换会话 {sid[:12]}…（{len(msgs)} 条消息）")
 
 
+def _cmd_workspace(ctx: CommandContext, args: str) -> None:
+    """切换工作区（workspace）。
+
+    约定：切换后清空上下文并创建新会话；仅重载新工作区的 project skills。
+    """
+    a = (args or "").strip().strip('"').strip("'")
+    if not a:
+        log.dim("用法: /workspace <路径>  或  /cd <路径>")
+        return
+
+    target = Path(a)
+    if not target.is_absolute():
+        target = (ctx.workspace / target)
+    try:
+        target = target.resolve()
+    except OSError:
+        log.warn("路径无效，无法切换。")
+        return
+    if not target.is_dir():
+        log.warn("目标不是目录，无法切换。")
+        return
+
+    if target == ctx.workspace.resolve():
+        log.dim("（已在该工作区。）")
+        return
+
+    # 1) 更新 workspace
+    ctx.workspace = target
+
+    # 2) 清空上下文并创建新会话（会话目录按 workspace 隔离）
+    ctx.state.chat_messages.clear()
+    ctx.state.pending_input = None
+    ctx.state.session_store = SessionStore(ctx.workspace, ctx.settings.model)
+
+    # 3) 重建 system_prompt：base + skills（bundled + user + new project）
+    try:
+        from .context import build_system_prompt
+        from .skills import build_skills_prompt_section, clear_skills, discover_skills
+
+        clear_skills(source="project")
+        discover_skills(ctx.workspace)
+
+        sp = build_system_prompt(ctx.workspace)
+        skills_section = build_skills_prompt_section()
+        if skills_section:
+            sp = sp + "\n\n" + skills_section
+        ctx.system_prompt = sp
+    except Exception:
+        # system_prompt 失败不应阻断切换；最差情况只是缺少 git/skills 注入
+        ctx.system_prompt = ""
+
+    log.info("已切换工作区并开始新会话。")
+    log.dim(f"  Workspace: {ctx.workspace}")
+    log.dim(f"  New session: {ctx.state.session_store.session_id}")
+
+
 def _cmd_compact(ctx: CommandContext, args: str) -> None:
     """将较早的消息压缩为摘要，保留最近若干条消息。"""
     if ctx.compact_service is None:
@@ -189,6 +245,7 @@ _COMMAND_HELP: list[tuple[str, str]] = [
     ("resume", "恢复会话：/resume <序号|id 前缀>"),
     ("compact", "压缩对话上下文：/compact <可选说明>"),
     ("skills", "列出可用技能"),
+    ("workspace 或 cd", "切换工作区：/workspace <路径>"),
     ("exit 或 quit", "退出 REPL"),
 ]
 
@@ -200,6 +257,9 @@ _COMMANDS: dict[str, CommandHandler] = {
     "resume": _cmd_resume,
     "compact": _cmd_compact,
     "skills": _cmd_skills,
+    "workspace": _cmd_workspace,
+    "ws": _cmd_workspace,
+    "cd": _cmd_workspace,
 }
 
 

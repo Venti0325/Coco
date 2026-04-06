@@ -95,3 +95,27 @@ def test_resolve_session_id_by_index():
     assert _resolve_session_id("2", metas) == "bbb222"
     assert _resolve_session_id("9", metas) is None
     assert _resolve_session_id("bbb", metas) == "bbb222"
+
+
+def test_dispatch_workspace_switch_starts_new_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    ws1 = tmp_path / "w1"
+    ws2 = tmp_path / "w2"
+    ws1.mkdir()
+    ws2.mkdir()
+
+    # 避免测试里触发真实 git/skills 扫描：打补丁到被 commands 动态导入的模块中
+    monkeypatch.setattr("core.context.build_system_prompt", lambda _ws=None: "SP")
+    monkeypatch.setattr("core.skills.clear_skills", lambda *_a, **_kw: None)
+    monkeypatch.setattr("core.skills.discover_skills", lambda *_a, **_kw: None)
+    monkeypatch.setattr("core.skills.build_skills_prompt_section", lambda: "")
+
+    settings = AppSettings(provider=Provider.ANTHROPIC, model="m")
+    store = SessionStore(ws1, "m")
+    old_id = store.session_id
+    st = ReplState(chat_messages=[{"role": "user", "content": "x"}], session_store=store)
+    ctx = CommandContext(workspace=ws1, settings=settings, state=st)
+
+    assert dispatch_slash(ctx, f"/workspace {ws2}") == "handled"
+    assert ctx.workspace == ws2.resolve()
+    assert st.chat_messages == []
+    assert st.session_store.session_id != old_id

@@ -11,10 +11,7 @@
 
 ```bash
 python -m venv .venv
-# Windows PowerShell:
 .\.venv\Scripts\Activate.ps1
-# macOS / Linux:
-# source .venv/bin/activate
 
 pip install -e ".[dev]"
 ```
@@ -27,7 +24,7 @@ cp .env.example .env   # Windows 可复制文件后手动编辑
 
 ## 配置说明
 
-优先级（从低到高）：代码默认 → `~/.config/coco/config.toml` → 项目根目录 **`.coco.toml`** → 环境变量 → CLI 参数。
+优先级（从低到高）：代码默认 → 用户目录配置文件 → 项目根目录 **`.coco.toml`** → 环境变量 → CLI 参数。
 
 常用环境变量（见 `.env.example`）：
 
@@ -75,14 +72,15 @@ coco --auto-approve     # 跳过 Write/Edit 的终端确认（慎用）
 | `/resume <序号或 id 前缀>` | 切换到指定会话 |
 | `/compact <说明>` | 压缩长对话上下文 |
 | `/skills` | 列出可用技能 |
+| `/workspace <路径>` | 切换工作区并开始新会话（也可用 `/cd`） |
 
 ## 功能概览
 
 - **工具**：Read、Glob、Grep（只读）；Shell、Write、Edit（需确认或使用 `--auto-approve`）
 - **Engine**：多轮工具循环（Anthropic 与 OpenAI 兼容路径）；硬上限防止死循环
 - **系统提示（context）**：工作目录、日期、可选 git 摘要、可选 **`COCO.md`** / **`CLAUDE.md`**
-- **会话**：JSONL 保存在用户数据目录下按工作区隔离的子目录中（默认类似 `~/.local/share/coco/sessions/<工作区键>/`）
-- **Skills**：内置与磁盘 skills（`~/.coco/skills/` 与 `<workspace>/.coco/skills/`），通过 `/<skill>` 触发
+- **会话**：JSONL 保存在用户数据目录下按工作区隔离的子目录中（Windows 下可在启动摘要里看到 Data dir）
+- **Skills**：内置与磁盘 skills（用户级与项目级），通过 `/<skill>` 触发
 
 ## 运行测试
 

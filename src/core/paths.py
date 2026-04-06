@@ -16,14 +16,14 @@ from pathlib import Path
 APP_NAME = "coco"
 
 def config_home() -> Path:
-    """用户级配置目录（POSIX 下为 ~/.config/coco）。"""
+    """用户级配置目录。"""
     xdg = os.environ.get("XDG_CONFIG_HOME")
     base = Path(xdg) if xdg else Path.home() / ".config"
     return base / APP_NAME
 
 
 def data_home() -> Path:
-    """用户级数据目录（POSIX 下为 ~/.local/share/coco）。"""
+    """用户级数据目录。"""
     xdg = os.environ.get("XDG_DATA_HOME")
     base = Path(xdg) if xdg else Path.home() / ".local" / "share"
     return base / APP_NAME
@@ -39,7 +39,7 @@ def state_home() -> Path:
 # ── 具体文件路径 ──────────────────────────────────────────────────────
 
 def user_config_file() -> Path:
-    """用户全局配置文件：~/.config/coco/config.toml"""
+    """用户全局配置文件。"""
     return config_home() / "config.toml"
 
 

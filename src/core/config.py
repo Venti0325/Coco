@@ -2,7 +2,7 @@
 
 配置优先级（从低到高）：
   1. 代码内默认值
-  2. 用户级 TOML   (~/.config/coco/config.toml)
+  2. 用户级 TOML   (用户目录配置文件)
   3. 项目级 TOML   (<workspace>/.coco.toml)
   4. 环境变量
   5. CLI 参数

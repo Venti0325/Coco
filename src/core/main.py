@@ -74,7 +74,7 @@ def _print_startup(workspace: Path, settings: AppSettings) -> None:
     else:
         log.warn(
             "  API 密钥未配置：请设置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY，"
-            "或写入 .env / ~/.config/coco/config.toml / 项目 .coco.toml"
+            "或写入 .env / 用户目录配置文件 / 项目 .coco.toml"
         )
         log.dim("  Provider   : 未配置")
         log.dim("  Model      : 未配置")
@@ -154,7 +154,7 @@ def entry() -> None:
 
     compact_service = CompactService(client)
 
-    def _make_engine() -> Engine:
+    def _make_engine(system: str) -> Engine:
         return Engine(
             client,
             [
@@ -165,7 +165,7 @@ def entry() -> None:
                 FileWriteTool(),
                 FileEditTool(),
             ],
-            system=system_prompt,
+            system=system,
             permissions=perms,
         )
 
@@ -199,6 +199,7 @@ def entry() -> None:
         incoming_user_text: str,
         chat_messages: list,
         session_store: SessionStore | None,
+        system: str,
     ) -> None:
         # “含本次输入”口径：历史消息条数 + 1（当前用户输入）超过阈值则先压缩历史
         if not should_compact_by_message_count(
@@ -213,7 +214,7 @@ def entry() -> None:
         try:
             new_msgs, _summary = compact_service.compact(
                 list(chat_messages),
-                system_prompt=system_prompt,
+                system_prompt=system,
                 custom_instructions="",
             )
         except Exception as exc:
@@ -233,7 +234,7 @@ def entry() -> None:
         if not _api_configured(settings):
             log.error("需要配置 API 密钥后才能执行 one-shot 请求。")
             sys.exit(1)
-        _run_query(_make_engine(), args.prompt, chat_messages=[], session_store=None)
+        _run_query(_make_engine(system_prompt), args.prompt, chat_messages=[], session_store=None)
     else:
         if not _api_configured(settings):
             log.error("需要配置 API 密钥；配置后可交互输入，或传入 prompt 参数。")
@@ -305,10 +306,11 @@ def entry() -> None:
                 incoming_user_text=text,
                 chat_messages=repl_state.chat_messages,
                 session_store=repl_state.session_store,
+                system=cmd_ctx.system_prompt or system_prompt,
             )
 
             _run_query(
-                _make_engine(),
+                _make_engine(cmd_ctx.system_prompt or system_prompt),
                 text,
                 chat_messages=repl_state.chat_messages,
                 session_store=repl_state.session_store,
