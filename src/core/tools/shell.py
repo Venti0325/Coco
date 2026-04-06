@@ -2,12 +2,30 @@ from __future__ import annotations
 
 import re
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from .base import Tool, ToolOutcome, ToolSpec
 
 _DEFAULT_TIMEOUT = 120
 _MAX_OUTPUT_CHARS = 20_000
+
+# 允许的命令前缀（大小写不敏感，按规范化空白后的字符串匹配）
+_ALLOWED_PREFIXES: tuple[str, ...] = (
+    "pytest",
+    "python -m pytest",
+    "python -m pip",
+    "pip",
+    "git status",
+    "git diff",
+    "git log",
+    "ruff",
+    "black",
+    "mypy",
+    "node",
+    "npm",
+    "pnpm",
+)
 
 # 极简危险命令拦截（宁愿误杀也不要静默放行破坏性命令）。
 # 目标：拦截明显的破坏/关机/格式化/递归删除等高风险操作。
@@ -44,7 +62,31 @@ def _is_dangerous(command: str) -> str | None:
     return None
 
 
+def _normalize_command(s: str) -> str:
+    # collapse whitespace; keep it simple and deterministic
+    return " ".join((s or "").strip().split())
+
+
+def _is_allowed_by_prefix(command: str) -> str | None:
+    c = _normalize_command(command).lower()
+    if not c:
+        return "empty command"
+    for p in _ALLOWED_PREFIXES:
+        pl = p.lower()
+        if c == pl or c.startswith(pl + " "):
+            return None
+    return "not in allowlist"
+
+
+def is_allowlisted_command(command: str) -> bool:
+    """是否命中允许的命令前缀白名单。"""
+    return _is_allowed_by_prefix(command) is None
+
+
 class ShellTool(Tool):
+    def __init__(self, workspace: Path):
+        self._workspace = workspace.resolve()
+
     @property
     def spec(self) -> ToolSpec:
         return ToolSpec(
@@ -60,6 +102,10 @@ class ShellTool(Tool):
                         "type": "string",
                         "description": "The PowerShell command to execute",
                     },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Working directory (must be inside the workspace)",
+                    },
                     "timeout": {
                         "type": "integer",
                         "description": "Timeout in seconds",
@@ -73,6 +119,7 @@ class ShellTool(Tool):
 
     def invoke(self, arguments: dict[str, Any]) -> ToolOutcome:
         command = str(arguments.get("command", "")).strip()
+        cwd_raw = arguments.get("cwd", None)
         timeout = arguments.get("timeout", _DEFAULT_TIMEOUT)
         try:
             timeout_s = int(timeout)
@@ -89,6 +136,27 @@ class ShellTool(Tool):
                 content=f"Error: blocked dangerous command ({reason}).",
             )
 
+        # cwd: default workspace root; allow relative paths under workspace
+        cwd = self._workspace
+        if cwd_raw is not None and str(cwd_raw).strip():
+            p = Path(str(cwd_raw))
+            if not p.is_absolute():
+                p = self._workspace / p
+            try:
+                p = p.resolve()
+            except OSError:
+                return ToolOutcome(success=False, content="Error: invalid cwd.")
+            try:
+                p.relative_to(self._workspace)
+            except ValueError:
+                return ToolOutcome(
+                    success=False,
+                    content="Error: blocked cwd (must be inside the workspace).",
+                )
+            if not p.is_dir():
+                return ToolOutcome(success=False, content="Error: cwd is not a directory.")
+            cwd = p
+
         try:
             result = subprocess.run(
                 [
@@ -104,6 +172,7 @@ class ShellTool(Tool):
                 encoding="utf-8",
                 errors="replace",
                 timeout=timeout_s,
+                cwd=str(cwd),
             )
             parts: list[str] = []
             stdout = result.stdout or ""
@@ -127,6 +196,7 @@ class ShellTool(Tool):
                     "exit_code": result.returncode,
                     "truncated_stdout": out_trunc,
                     "truncated_stderr": err_trunc,
+                    "cwd": str(cwd),
                 },
             )
         except subprocess.TimeoutExpired:

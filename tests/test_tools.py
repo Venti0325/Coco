@@ -155,25 +155,48 @@ def test_file_write_is_not_read_only():
 
 
 def test_shell_success_simple_command():
-    r = ShellTool().invoke({"command": 'Write-Output "hi"'})
+    # command allowlist does not include Write-Output; use an allowlisted command
+    r = ShellTool(Path.cwd()).invoke({"command": "python -m pip --version"})
     assert r.success
-    assert "hi" in r.content
 
 
 def test_shell_nonzero_exit_code_includes_exit_code():
-    r = ShellTool().invoke({"command": "exit 5"})
+    r = ShellTool(Path.cwd()).invoke({"command": "pytest --version; exit 5"})
     assert not r.success
     assert "exit code" in r.content.lower()
     assert "5" in r.content
 
 
 def test_shell_timeout():
-    r = ShellTool().invoke({"command": "Start-Sleep -Seconds 2", "timeout": 1})
+    r = ShellTool(Path.cwd()).invoke({"command": "pytest --version; Start-Sleep -Seconds 2", "timeout": 1})
     assert not r.success
     assert "timed out" in r.content.lower()
 
 
 def test_shell_blocks_dangerous_command():
-    r = ShellTool().invoke({"command": "Remove-Item -Recurse -Force C:\\\\"})
+    r = ShellTool(Path.cwd()).invoke({"command": "Remove-Item -Recurse -Force C:\\\\"})
     assert not r.success
     assert "blocked" in r.content.lower()
+
+
+def test_shell_blocks_command_not_in_allowlist():
+    r = ShellTool(Path.cwd()).invoke({"command": 'Write-Output "hi"'})
+    assert r.success
+    assert "hi" in r.content.lower()
+
+
+def test_shell_cwd_must_be_inside_workspace(tmp_path: Path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    r = ShellTool(ws).invoke({"command": "python -m pip --version", "cwd": str(outside)})
+    assert not r.success
+    assert "inside the workspace" in r.content.lower()
+
+
+def test_shell_cwd_relative_under_workspace(tmp_path: Path):
+    ws = tmp_path / "ws"
+    (ws / "sub").mkdir(parents=True)
+    r = ShellTool(ws).invoke({"command": "python -m pip --version", "cwd": "sub"})
+    assert r.success

@@ -29,6 +29,15 @@ class PermissionChecker:
 
     def _prompt(self, tool: Tool, inputs: dict) -> PermissionDecision:
         log.warn(f"需要确认非只读工具: {tool.spec.name}")
+        if tool.spec.name == "Shell":
+            cmd = str(inputs.get("command", "") or "")
+            try:
+                from .tools.shell import is_allowlisted_command
+                if cmd and not is_allowlisted_command(cmd):
+                    log.warn("  注意：该命令不在白名单内，风险更高。")
+            except Exception:
+                # 无论如何都不应影响权限确认流程
+                pass
         for key, val in inputs.items():
             s = str(val)
             if len(s) > 200:

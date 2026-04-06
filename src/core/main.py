@@ -161,7 +161,7 @@ def entry() -> None:
                 FileReadTool(),
                 GlobTool(),
                 GrepTool(),
-                ShellTool(),
+                ShellTool(workspace),
                 FileWriteTool(),
                 FileEditTool(),
             ],
