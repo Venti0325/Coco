@@ -194,6 +194,42 @@ def entry() -> None:
         chat_messages.extend(result.messages)
         return True
 
+    def _run_skill_fork(
+        *,
+        skill_name: str,
+        skill_prompt: str,
+        system: str,
+        chat_messages: list,
+        session_store: SessionStore,
+    ) -> None:
+        """以隔离上下文执行 skill，并把最终结果回注到原会话。"""
+        snapshot = list(chat_messages)
+        try:
+            result = _make_engine(system).run(skill_prompt, prior_messages=None)
+        except Exception as exc:
+            log.error(f"技能 /{skill_name} 执行失败: {LLMClient.error_message(exc)}")
+            return
+
+        for line in result.tool_log:
+            log.dim(line)
+        answer = (result.answer or "").strip()
+        if not answer:
+            answer = f"（技能 /{skill_name} 执行完成，但没有返回文本结果。）"
+
+        # 恢复原对话，并追加一条“技能结果”消息，避免污染上下文
+        chat_messages.clear()
+        chat_messages.extend(snapshot)
+        chat_messages.append(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": f"[/{skill_name}]\n{answer}"}],
+            }
+        )
+        try:
+            session_store.save_transcript(list(chat_messages))
+        except Exception:
+            pass
+
     def _auto_compact_if_needed(
         *,
         incoming_user_text: str,
@@ -290,8 +326,21 @@ def entry() -> None:
                 break
             if rc == "handled":
                 # skills 可能将待执行输入写入 pending_input
+                pending_fork = repl_state.pending_fork
+                repl_state.pending_fork = None
                 pending = repl_state.pending_input
                 repl_state.pending_input = None
+                if pending_fork:
+                    name, prompt = pending_fork
+                    _run_skill_fork(
+                        skill_name=name,
+                        skill_prompt=prompt,
+                        system=cmd_ctx.system_prompt or system_prompt,
+                        chat_messages=repl_state.chat_messages,
+                        session_store=repl_state.session_store,
+                    )
+                    log.info("")
+                    continue
                 if pending:
                     text = pending
                 else:

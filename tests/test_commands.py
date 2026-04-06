@@ -119,3 +119,29 @@ def test_dispatch_workspace_switch_starts_new_session(tmp_path: Path, monkeypatc
     assert ctx.workspace == ws2.resolve()
     assert st.chat_messages == []
     assert st.session_store.session_id != old_id
+
+
+def test_dispatch_skill_fork_sets_pending_fork(tmp_path: Path):
+    from core.skills import register_skill, Skill, clear_skills
+
+    clear_skills()
+    register_skill(
+        Skill(
+            name="forkit",
+            description="x",
+            context="fork",
+            source="bundled",
+            _prompt_text="do $ARGUMENTS",
+        )
+    )
+    ws = tmp_path
+    settings = AppSettings(provider=Provider.ANTHROPIC, model="m")
+    store = SessionStore(ws, "m")
+    st = ReplState(chat_messages=[], session_store=store)
+    ctx = CommandContext(workspace=ws, settings=settings, state=st)
+
+    assert dispatch_slash(ctx, "/forkit hello") == "handled"
+    assert st.pending_fork is not None
+    name, prompt = st.pending_fork
+    assert name == "forkit"
+    assert "hello" in prompt

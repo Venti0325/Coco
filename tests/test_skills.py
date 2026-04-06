@@ -118,3 +118,15 @@ def test_build_skills_prompt_section_lists_slash_commands():
     section = build_skills_prompt_section()
     assert "/x" in section
 
+
+def test_skill_context_fork_is_parsed_from_frontmatter():
+    meta, body = _parse_frontmatter(
+        "---\n"
+        "name: fork-skill\n"
+        "context: fork\n"
+        "---\n"
+        "Do something.\n"
+    )
+    s = _skill_from_frontmatter(meta, body, name="fallback", source="project", skill_root="X")
+    assert s.context == "fork"
+
