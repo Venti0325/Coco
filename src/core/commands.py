@@ -12,6 +12,7 @@ from typing import Callable, Literal
 from . import log
 from .models import AppSettings
 from .session import SessionMeta, SessionStore
+from .compact import CompactService, estimate_tokens
 
 DispatchResult = Literal["not_slash", "handled", "unknown", "exit"]
 
@@ -31,6 +32,8 @@ class CommandContext:
     workspace: Path
     settings: AppSettings
     state: ReplState
+    compact_service: CompactService | None = None
+    system_prompt: str = ""
 
 
 def parse_command(text: str) -> tuple[str, str] | None:
@@ -120,11 +123,47 @@ def _cmd_resume(ctx: CommandContext, args: str) -> None:
     log.info(f"已切换会话 {sid[:12]}…（{len(msgs)} 条消息）")
 
 
+def _cmd_compact(ctx: CommandContext, args: str) -> None:
+    """将较早的消息压缩为摘要，保留最近若干条消息。"""
+    if ctx.compact_service is None:
+        log.warn("compact 未启用（缺少 compact_service）。")
+        return
+    msgs = list(ctx.state.chat_messages)
+    if len(msgs) < 4:
+        log.dim("（消息太少，无法压缩。）")
+        return
+    pre = estimate_tokens(msgs)
+    log.dim(f"正在压缩 {len(msgs)} 条消息（约 {pre:,} tokens）…")
+    try:
+        new_msgs, _summary = ctx.compact_service.compact(
+            msgs,
+            system_prompt=ctx.system_prompt,
+            custom_instructions=args,
+        )
+    except Exception as exc:
+        log.warn(f"压缩失败：{exc}")
+        return
+
+    ctx.state.chat_messages.clear()
+    ctx.state.chat_messages.extend(new_msgs)
+    try:
+        ctx.state.session_store.save_transcript(new_msgs)
+    except Exception:
+        # 会话持久化失败不应中断交互
+        pass
+
+    post = estimate_tokens(new_msgs)
+    log.info(
+        f"压缩完成：{pre:,} → {post:,} tokens（{len(msgs)} → {len(new_msgs)} 条消息）"
+    )
+
+
 _COMMAND_HELP: list[tuple[str, str]] = [
     ("help", "显示本列表"),
     ("clear", "清空上下文并开始新会话"),
     ("history", "列出当前工作区已保存会话"),
     ("resume", "恢复会话：/resume <序号|id 前缀>"),
+    ("compact", "压缩对话上下文：/compact <可选说明>"),
     ("exit 或 quit", "退出 REPL"),
 ]
 
@@ -134,6 +173,7 @@ _COMMANDS: dict[str, CommandHandler] = {
     "clear": _cmd_clear,
     "history": _cmd_history,
     "resume": _cmd_resume,
+    "compact": _cmd_compact,
 }
 
 

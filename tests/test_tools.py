@@ -11,6 +11,7 @@ from core.tools.file_read import FileReadTool
 from core.tools.file_write import FileWriteTool
 from core.tools.glob_tool import GlobTool
 from core.tools.grep_tool import GrepTool
+from core.tools.shell import ShellTool
 
 
 @pytest.fixture
@@ -151,3 +152,22 @@ def test_file_write_creates_file(tmp_path):
 
 def test_file_write_is_not_read_only():
     assert FileWriteTool().is_read_only is False
+
+
+def test_shell_success_simple_command():
+    r = ShellTool().invoke({"command": 'Write-Output "hi"'})
+    assert r.success
+    assert "hi" in r.content
+
+
+def test_shell_nonzero_exit_code_includes_exit_code():
+    r = ShellTool().invoke({"command": "exit 5"})
+    assert not r.success
+    assert "exit code" in r.content.lower()
+    assert "5" in r.content
+
+
+def test_shell_timeout():
+    r = ShellTool().invoke({"command": "Start-Sleep -Seconds 2", "timeout": 1})
+    assert not r.success
+    assert "timed out" in r.content.lower()

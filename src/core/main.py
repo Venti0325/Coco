@@ -19,6 +19,7 @@ from core.paths import config_home, data_home, ensure_dir
 from core.config import load_settings
 from core.models import AppSettings
 from core.commands import CommandContext, ReplState, dispatch_slash
+from core.compact import CompactService
 from core.context import build_system_prompt
 from core.engine import Engine
 from core.session import SessionStore
@@ -30,6 +31,7 @@ from core.tools import (
     FileWriteTool,
     GlobTool,
     GrepTool,
+    ShellTool,
 )
 from core import log
 
@@ -139,6 +141,7 @@ def entry() -> None:
 
     perms = PermissionChecker(auto_approve=args.auto_approve)
     system_prompt = build_system_prompt(workspace)
+    compact_service = CompactService(client)
 
     def _make_engine() -> Engine:
         return Engine(
@@ -147,6 +150,7 @@ def entry() -> None:
                 FileReadTool(),
                 GlobTool(),
                 GrepTool(),
+                ShellTool(),
                 FileWriteTool(),
                 FileEditTool(),
             ],
@@ -218,6 +222,8 @@ def entry() -> None:
             workspace=workspace,
             settings=settings,
             state=repl_state,
+            compact_service=compact_service,
+            system_prompt=system_prompt,
         )
 
         while True:

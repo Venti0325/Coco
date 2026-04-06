@@ -7,6 +7,7 @@ from .file_read import FileReadTool
 from .file_write import FileWriteTool
 from .glob_tool import GlobTool
 from .grep_tool import GrepTool
+from .shell import ShellTool
 
 __all__ = [
     "Tool",
@@ -18,4 +19,5 @@ __all__ = [
     "FileWriteTool",
     "GlobTool",
     "GrepTool",
+    "ShellTool",
 ]
