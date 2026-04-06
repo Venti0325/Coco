@@ -13,6 +13,7 @@ from . import log
 from .models import AppSettings
 from .session import SessionMeta, SessionStore
 from .compact import CompactService, estimate_tokens
+from .skills import Skill, get_skill, list_skills
 
 DispatchResult = Literal["not_slash", "handled", "unknown", "exit"]
 
@@ -25,6 +26,7 @@ class ReplState:
 
     chat_messages: list
     session_store: SessionStore
+    pending_input: str | None = None
 
 
 @dataclass
@@ -158,12 +160,35 @@ def _cmd_compact(ctx: CommandContext, args: str) -> None:
     )
 
 
+def _cmd_skills(ctx: CommandContext, args: str) -> None:
+    _ = args
+    skills = list_skills(user_invocable_only=True)
+    if not skills:
+        log.dim("（暂无可用技能）")
+        return
+    log.info("可用技能：")
+    for s in skills:
+        desc = s.description or "（无说明）"
+        log.dim(f"  /{s.name} — {desc}")
+
+
+def _execute_skill(skill: Skill, args: str, ctx: CommandContext) -> None:
+    prompt = (skill.get_prompt(args) or "").strip()
+    if not prompt:
+        log.dim(f"（技能 /{skill.name} 未生成有效提示词）")
+        return
+    # 让 REPL 把 skill prompt 当作一次普通用户输入执行（下一步由 main 调用 engine.run）
+    ctx.state.pending_input = prompt
+    log.dim(f"已运行技能：/{skill.name}")
+
+
 _COMMAND_HELP: list[tuple[str, str]] = [
     ("help", "显示本列表"),
     ("clear", "清空上下文并开始新会话"),
     ("history", "列出当前工作区已保存会话"),
     ("resume", "恢复会话：/resume <序号|id 前缀>"),
     ("compact", "压缩对话上下文：/compact <可选说明>"),
+    ("skills", "列出可用技能"),
     ("exit 或 quit", "退出 REPL"),
 ]
 
@@ -174,6 +199,7 @@ _COMMANDS: dict[str, CommandHandler] = {
     "history": _cmd_history,
     "resume": _cmd_resume,
     "compact": _cmd_compact,
+    "skills": _cmd_skills,
 }
 
 
@@ -187,6 +213,10 @@ def dispatch_slash(ctx: CommandContext, line: str) -> DispatchResult:
         return "exit"
     handler = _COMMANDS.get(name)
     if handler is None:
+        skill = get_skill(name)
+        if skill is not None and skill.user_invocable:
+            _execute_skill(skill, args, ctx)
+            return "handled"
         return "unknown"
     handler(ctx, args)
     return "handled"

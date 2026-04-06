@@ -21,6 +21,8 @@ from core.models import AppSettings
 from core.commands import CommandContext, ReplState, dispatch_slash
 from core.compact import AUTO_COMPACT_MESSAGE_LIMIT, CompactService, should_compact_by_message_count
 from core.context import build_system_prompt
+from core.skills import build_skills_prompt_section, discover_skills
+from core.skills_bundled import register_bundled_skills
 from core.engine import Engine
 from core.session import SessionStore
 from core.llm import LLMClient
@@ -140,7 +142,16 @@ def entry() -> None:
     log.info("")
 
     perms = PermissionChecker(auto_approve=args.auto_approve)
+
+    # Skills：先注册内置技能，再加载磁盘技能，最后注入可用技能列表到 system prompt。
+    register_bundled_skills()
+    discover_skills(workspace)
+
     system_prompt = build_system_prompt(workspace)
+    skills_section = build_skills_prompt_section()
+    if skills_section:
+        system_prompt = system_prompt + "\n\n" + skills_section
+
     compact_service = CompactService(client)
 
     def _make_engine() -> Engine:
@@ -277,8 +288,14 @@ def entry() -> None:
             if rc == "exit":
                 break
             if rc == "handled":
-                log.info("")
-                continue
+                # skills 可能将待执行输入写入 pending_input
+                pending = repl_state.pending_input
+                repl_state.pending_input = None
+                if pending:
+                    text = pending
+                else:
+                    log.info("")
+                    continue
             if rc == "unknown":
                 log.warn("未知命令，输入 /help 查看列表。")
                 log.info("")
