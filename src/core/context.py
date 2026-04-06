@@ -45,29 +45,32 @@ def build_system_prompt(workspace: Path | None = None) -> str:
 def _git_summary(cwd: str) -> str:
     """分支、简短 status、最近提交；非 git 目录或超时时返回空串。"""
     try:
-        br = subprocess.run(
+        # Windows 下默认控制台编码可能为 GBK，git 输出包含非本地编码字符时
+        # subprocess 的解码线程可能抛出 UnicodeDecodeError，导致 stdout 为 None。
+        # 显式指定 UTF-8 并替换不可解码字符，保证启动不因 git 摘要失败而中断。
+        common = {
+            "capture_output": True,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "cwd": cwd,
+            "timeout": 5,
+        }
+
+        br = (subprocess.run(
             ["git", "branch", "--show-current"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            timeout=5,
-        ).stdout.strip()
+            **common,
+        ).stdout or "").strip()
 
-        st = subprocess.run(
+        st = (subprocess.run(
             ["git", "status", "--short"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            timeout=5,
-        ).stdout.strip()[:2000]
+            **common,
+        ).stdout or "").strip()[:2000]
 
-        log = subprocess.run(
+        log = (subprocess.run(
             ["git", "log", "--oneline", "-5"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            timeout=5,
-        ).stdout.strip()
+            **common,
+        ).stdout or "").strip()
 
         if not br and not st and not log:
             return ""
