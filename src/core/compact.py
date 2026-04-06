@@ -239,5 +239,7 @@ class CompactService:
             },
         ]
         new_messages.extend(recent)
+        # 避免压缩后出现连续同 role（例如 recent 恰好以 assistant 开头）。
+        new_messages = _fix_alternation(new_messages)
         return new_messages, summary_text
 

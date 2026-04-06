@@ -61,6 +61,10 @@ coco --auto-approve     # 跳过 Write/Edit 的终端确认（慎用）
 
 交互模式下可用 **`exit`** / **`quit`** 或 **`/exit`** 退出。
 
+## 一个真实的终端示例
+<p align="center">
+  <img src="demo/demo1.png" alt="Coco demo" width="900">
+</p>
 ## 斜杠命令
 
 | 命令 | 说明 |
@@ -69,13 +73,16 @@ coco --auto-approve     # 跳过 Write/Edit 的终端确认（慎用）
 | `/clear` | 新开会话（新 session id） |
 | `/history` | 当前工作区下的已保存会话列表 |
 | `/resume <序号或 id 前缀>` | 切换到指定会话 |
+| `/compact <说明>` | 压缩长对话上下文 |
+| `/skills` | 列出可用技能 |
 
 ## 功能概览
 
-- **工具**：Read、Glob、Grep（只读）；Write、Edit（需确认或使用 `--auto-approve`）
+- **工具**：Read、Glob、Grep（只读）；Shell、Write、Edit（需确认或使用 `--auto-approve`）
 - **Engine**：多轮工具循环（Anthropic 与 OpenAI 兼容路径）；硬上限防止死循环
 - **系统提示（context）**：工作目录、日期、可选 git 摘要、可选 **`COCO.md`** / **`CLAUDE.md`**
 - **会话**：JSONL 保存在用户数据目录下按工作区隔离的子目录中（默认类似 `~/.local/share/coco/sessions/<工作区键>/`）
+- **Skills**：内置与磁盘 skills（`~/.coco/skills/` 与 `<workspace>/.coco/skills/`），通过 `/<skill>` 触发
 
 ## 运行测试
 

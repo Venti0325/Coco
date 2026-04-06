@@ -171,3 +171,9 @@ def test_shell_timeout():
     r = ShellTool().invoke({"command": "Start-Sleep -Seconds 2", "timeout": 1})
     assert not r.success
     assert "timed out" in r.content.lower()
+
+
+def test_shell_blocks_dangerous_command():
+    r = ShellTool().invoke({"command": "Remove-Item -Recurse -Force C:\\\\"})
+    assert not r.success
+    assert "blocked" in r.content.lower()
