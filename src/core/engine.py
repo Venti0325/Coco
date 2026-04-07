@@ -13,18 +13,41 @@ import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from .llm import LLMClient
 from .models import AbortedError, TokenUsage
 from .permissions import PermissionChecker
 from .tools.base import Tool
 
-_MAX_STEPS_DEFAULT = 6
+_MAX_STEPS_SIMPLE = 10
+_MAX_STEPS_COMPLEX = 20
+
+# 触发复杂模式的关键词（中英混合）
+_COMPLEX_KEYWORDS_ASCII = (
+    # 探索 / 理解类
+    "read", "explore", "analyze", "analyse", "understand", "overview",
+    "summarize", "summarise", "explain", "describe", "review", "what is",
+    # 修改 / 构建类
+    "refactor", "migrate", "rewrite", "implement", "architecture",
+    "optimize", "performance", "upgrade", "scaffold", "generate",
+)
+_COMPLEX_KEYWORDS_CJK = (
+    # 探索 / 理解类
+    "阅读", "读一下", "了解", "分析", "查看", "看看", "浏览",
+    "什么项目", "是什么项目", "介绍", "概览", "梳理", "调研",
+    "怎么", "如何", "帮我看", "重要文件",
+    # 修改 / 构建类
+    "重构", "迁移", "实现", "架构", "设计", "优化", "性能",
+    "全量", "整个项目", "改造", "生成", "脚手架",
+)
 
 _SYSTEM = """You are Coco, a terminal coding assistant.
 
 Tools: Read, Glob, Grep (read-only); Write (full file), Edit (unique old_string → new_string).
 Gather facts with Read/Glob/Grep before editing. Edit requires old_string to match exactly once.
+
+When exploring a project structure, always use Glob with pattern "**/*" (not "*.*") to find all files recursively.
 
 After tools return, answer clearly. Avoid redundant calls and endless loops."""
 
@@ -88,7 +111,8 @@ class Engine:
         llm: LLMClient,
         tools: Sequence[Tool],
         *,
-        max_steps: int = _MAX_STEPS_DEFAULT,
+        max_steps: int = _MAX_STEPS_SIMPLE,
+        max_steps_complex: int = _MAX_STEPS_COMPLEX,
         system: str | None = None,
         permissions: PermissionChecker | None = None,
         allowed_tools: set[str] | None = None,
@@ -99,6 +123,7 @@ class Engine:
         self._tools = list(tools)
         self._by_name = {t.spec.name: t for t in self._tools}
         self._max_steps = max(1, max_steps)
+        self._max_steps_complex = max(self._max_steps, max_steps_complex)
         self._system = system or _SYSTEM
         self._api_tools = _anthropic_tool_defs(self._tools)
         self._permissions = permissions or PermissionChecker()
@@ -113,14 +138,37 @@ class Engine:
         """从任意线程调用，中止当前飞行中的请求。"""
         self._abort_event.set()
 
+    def _max_steps_for_turn(self, user_text: str) -> int:
+        """启发式判断本轮是简单还是复杂任务，返回对应步数上限。
+
+        宁可让助手停下来向用户确认，也不要陷入无效循环。
+        """
+        text = str(user_text or "")
+        # 长输入 / 多行 → 复杂
+        if len(text) >= 400 or text.count("\n") >= 5:
+            return self._max_steps_complex
+        low = text.lower()
+        if any(k in low for k in _COMPLEX_KEYWORDS_ASCII):
+            return self._max_steps_complex
+        if any(k in text for k in _COMPLEX_KEYWORDS_CJK):
+            return self._max_steps_complex
+        return self._max_steps
+
     def run(
         self,
         user_text: str,
         *,
         prior_messages: list[dict] | None = None,
+        on_text_chunk: Callable[[str], None] | None = None,
+        on_tool_call: Callable[[str, dict], None] | None = None,
     ) -> EngineResult:
         self._abort_event.clear()
-        return self._run_tool_loop(user_text, prior_messages=prior_messages)
+        return self._run_tool_loop(
+            user_text,
+            prior_messages=prior_messages,
+            on_text_chunk=on_text_chunk,
+            on_tool_call=on_tool_call,
+        )
 
     def _path_allowed_for_tool(self, tool_name: str, inp: dict) -> tuple[bool, str]:
         if not self._allowed_paths:
@@ -185,22 +233,31 @@ class Engine:
         user_text: str,
         *,
         prior_messages: list[dict] | None = None,
+        on_text_chunk: Callable[[str], None] | None = None,
+        on_tool_call: Callable[[str, dict], None] | None = None,
     ) -> EngineResult:
         messages: list[dict] = list(prior_messages or []) + [
             {"role": "user", "content": user_text}
         ]
         tool_log: list[str] = []
         usage_acc: TokenUsage | None = None
+        max_steps = self._max_steps_for_turn(user_text)
 
-        for _ in range(self._max_steps):
+        for _ in range(max_steps):
             if self._abort_event.is_set():
                 raise AbortedError("用户中止")
-            resp = self._llm.complete(
+            with self._llm.stream(
                 messages=messages,
                 system=self._system,
                 tools=self._api_tools,
-                abort_event=self._abort_event,
-            )
+            ) as stream:
+                for chunk in stream.text_stream:
+                    if self._abort_event.is_set():
+                        stream.close()
+                        raise AbortedError("用户中止")
+                    if on_text_chunk is not None:
+                        on_text_chunk(chunk)
+                resp = stream.get_final_message()
             usage_acc = _merge_usage(usage_acc, resp.usage)
             blocks = list(resp.content)
             tool_blocks = [b for b in blocks if b.get("type") == "tool_use"]
@@ -223,6 +280,8 @@ class Engine:
                 raw_in = tb.get("input")
                 inp = raw_in if isinstance(raw_in, dict) else {}
                 tool_log.append(_tool_line(name, inp))
+                if on_tool_call is not None:
+                    on_tool_call(name, inp)
 
                 tool = self._by_name.get(name)
                 if tool is None:
@@ -255,7 +314,7 @@ class Engine:
 
             messages.append({"role": "user", "content": result_blocks})
 
-        answer = "（已达到工具调用轮次上限，请缩短问题或拆分步骤。）"
+        answer = f"（已达到工具调用轮次上限 {max_steps}，请缩短问题或拆分步骤。）"
         messages.append(
             {
                 "role": "assistant",

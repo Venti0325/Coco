@@ -38,6 +38,10 @@ from core.tools import (
 from core import log
 from core._keylistener import EscListener
 
+from rich.live import Live
+from rich.spinner import Spinner
+from rich.text import Text
+
 # ── prompt_toolkit（可选，缺失时降级为 input()）─────────────────────────
 try:
     from prompt_toolkit import PromptSession
@@ -112,8 +116,12 @@ def _build_prompt_session() -> "PromptSession | None":  # type: ignore[type-arg]
 
 # ── 启动诊断 ──────────────────────────────────────────────────────────
 
-_GREETING = """\
-[bold cyan]Coco[/bold cyan] [dim]v{ver}[/dim]  —  your AI pair-programmer
+_BANNER = """\
+[bold cyan] ██████╗ ██████╗  ██████╗ ██████╗ [/bold cyan]
+[bold cyan]██╔════╝██╔═══██╗██╔════╝██╔═══██╗[/bold cyan]
+[bold cyan]██║     ██║   ██║██║     ██║   ██║[/bold cyan]
+[bold cyan]╚██████╗╚██████╔╝╚██████╗╚██████╔╝[/bold cyan]
+[bold cyan] ╚═════╝ ╚═════╝  ╚═════╝ ╚═════╝[/bold cyan]  [dim]v{ver}  ·  your AI pair-programmer[/dim]
 """
 
 
@@ -124,7 +132,7 @@ def _api_configured(settings: AppSettings) -> bool:
 
 def _print_startup(workspace: Path, settings: AppSettings) -> None:
     """显示版本、路径与配置摘要。"""
-    log.banner(_GREETING.format(ver=__version__))
+    log.banner(_BANNER.format(ver=__version__))
 
     cfg_dir = config_home()
     dat_dir = data_home()
@@ -152,6 +160,21 @@ def _print_startup(workspace: Path, settings: AppSettings) -> None:
         log.dim("  Model      : 未配置")
         log.dim("  Max tokens : 未配置")
     log.info("")
+
+
+# ── 工具调用预览 ──────────────────────────────────────────────────────
+
+def _tool_preview(name: str, inp: dict) -> str:
+    """把工具输入浓缩成一行简短预览文本。"""
+    if name == "Shell":
+        cmd = str(inp.get("command", ""))
+        return (cmd[:80] + "…") if len(cmd) > 80 else cmd
+    if name in ("Read", "Write", "Edit"):
+        fp = str(inp.get("file_path", ""))
+        return ("…" + fp[-58:]) if len(fp) > 60 else fp
+    if name in ("Glob", "Grep"):
+        return str(inp.get("pattern", ""))
+    return ""
 
 
 # ── CLI 参数解析 ──────────────────────────────────────────────────────
@@ -244,6 +267,8 @@ def entry() -> None:
                 FileWriteTool(),
                 FileEditTool(),
             ],
+            max_steps=settings.max_steps,
+            max_steps_complex=settings.max_steps_complex,
             system=system,
             permissions=perms,
             allowed_tools=allowed_tools,
@@ -259,26 +284,72 @@ def entry() -> None:
         session_store: SessionStore | None,
     ) -> bool:
         """返回是否成功完成一轮（用于决定是否写会话）。"""
+        console = log.get_console()
+        live: Live | None = None
+        _streaming = [False]   # 是否已进入流式文本阶段
+
+        def _start_spinner(msg: str = "思考中…") -> None:
+            nonlocal live
+            _stop_spinner()
+            live = Live(
+                Spinner("dots", text=Text(msg, style="dim")),
+                console=console,
+                refresh_per_second=10,
+                transient=True,
+            )
+            live.start()
+
+        def _stop_spinner() -> None:
+            nonlocal live
+            if live is not None:
+                live.stop()
+                live = None
+
+        def _on_text_chunk(chunk: str) -> None:
+            if not _streaming[0]:
+                _stop_spinner()
+                _streaming[0] = True
+            if not args.print_mode:
+                console.print(chunk, end="", markup=False)
+
+        def _on_tool_call(name: str, inp: dict) -> None:
+            _stop_spinner()
+            _streaming[0] = False
+            preview = _tool_preview(name, inp)
+            console.print(f"\n[dim]↳ {name}({preview})[/dim]")
+            _start_spinner("执行工具…")
+
         with EscListener(on_cancel=engine.abort) as listener:
             perms.pause_fn = listener.pause
             perms.resume_fn = listener.resume
+            _start_spinner()
             try:
-                result = engine.run(text, prior_messages=chat_messages or None)
+                result = engine.run(
+                    text,
+                    prior_messages=chat_messages or None,
+                    on_text_chunk=_on_text_chunk,
+                    on_tool_call=_on_tool_call,
+                )
             except AbortedError:
+                _stop_spinner()
+                console.print()
                 log.warn("已中止（ESC）")
                 return False
             except Exception as exc:
+                _stop_spinner()
                 log.error(f"请求失败: {LLMClient.error_message(exc)}")
                 return False
             finally:
+                _stop_spinner()
                 perms.pause_fn = None
                 perms.resume_fn = None
-        for line in result.tool_log:
-            log.dim(line)
+
         if args.print_mode:
             print(result.answer, end="" if result.answer.endswith("\n") else "\n")
         else:
-            log.info(result.answer)
+            # 流式已逐块打印，只补一个收尾换行
+            console.print()
+
         if session_store is not None:
             session_store.save_transcript(result.messages)
         chat_messages.clear()
@@ -440,6 +511,7 @@ def entry() -> None:
             if low in ("exit", "quit"):
                 break
 
+            pending_skill = None
             rc = dispatch_slash(cmd_ctx, text)
             if rc == "exit":
                 break

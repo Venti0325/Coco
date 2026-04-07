@@ -46,6 +46,8 @@ class AppSettings:
     base_url: str | None = None
     max_tokens: int = 16_384
     effort: str | None = None          # low / medium / high（OpenAI 推理力度）
+    max_steps: int = 10                # 简单任务工具循环上限
+    max_steps_complex: int = 20        # 复杂任务工具循环上限
 
 
 # ── Token 用量追踪 ────────────────────────────────────────────────────

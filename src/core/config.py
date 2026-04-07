@@ -48,14 +48,16 @@ _MAX_TOKENS_TABLE: tuple[tuple[str, int], ...] = (
 # ── 环境变量 → 配置键映射 ────────────────────────────────────────────
 
 _ENV_MAP: dict[str, str] = {
-    "COCO_PROVIDER":      "provider",
-    "COCO_MODEL":         "model",
-    "COCO_MAX_TOKENS":    "max_tokens",
-    "COCO_EFFORT":        "effort",
-    "ANTHROPIC_API_KEY":  "anthropic_api_key",
-    "ANTHROPIC_BASE_URL": "anthropic_base_url",
-    "OPENAI_API_KEY":     "openai_api_key",
-    "OPENAI_BASE_URL":    "openai_base_url",
+    "COCO_PROVIDER":          "provider",
+    "COCO_MODEL":             "model",
+    "COCO_MAX_TOKENS":        "max_tokens",
+    "COCO_EFFORT":            "effort",
+    "COCO_MAX_STEPS":         "max_steps",
+    "COCO_MAX_STEPS_COMPLEX": "max_steps_complex",
+    "ANTHROPIC_API_KEY":      "anthropic_api_key",
+    "ANTHROPIC_BASE_URL":     "anthropic_base_url",
+    "OPENAI_API_KEY":         "openai_api_key",
+    "OPENAI_BASE_URL":        "openai_base_url",
 }
 
 
@@ -96,7 +98,7 @@ def _read_toml(path: Path) -> dict:
 
     flat: dict = {}
     # 顶层标量字段
-    for key in ("provider", "model", "max_tokens", "effort"):
+    for key in ("provider", "model", "max_tokens", "effort", "max_steps", "max_steps_complex"):
         if key in data:
             flat[key] = data[key]
     # provider 子表 → 展平为 "<provider>_<key>"
@@ -217,6 +219,9 @@ def load_settings(
     api_key = _pick("api_key") or _pick(f"{pkey}_api_key")
     base_url = _pick("base_url") or _pick(f"{pkey}_base_url")
 
+    max_steps = _safe_int(_pick("max_steps"), 10)
+    max_steps_complex = _safe_int(_pick("max_steps_complex"), 20)
+
     return AppSettings(
         provider=provider,
         model=model,
@@ -224,4 +229,6 @@ def load_settings(
         base_url=base_url,
         max_tokens=max_tokens,
         effort=effort,
+        max_steps=max_steps,
+        max_steps_complex=max_steps_complex,
     )

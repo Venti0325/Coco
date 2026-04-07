@@ -36,7 +36,13 @@ class GlobTool(Tool):
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Glob pattern e.g. '**/*.py'",
+                        "description": (
+                            "Glob pattern. Use '**/*' to list ALL files recursively "
+                            "(required when exploring a project). Use '**/*.py' for "
+                            "all Python files, '*' for top-level items only. "
+                            "NOTE: '*.*' only matches top-level files with an extension "
+                            "and will miss subdirectories and dotfiles."
+                        ),
                     },
                     "path": {
                         "type": "string",
