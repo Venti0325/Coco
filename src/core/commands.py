@@ -253,8 +253,81 @@ def _execute_skill(skill: Skill, args: str, ctx: CommandContext) -> None:
         log.dim(f"已运行技能：/{skill.name}")
 
 
+def _cmd_doctor(ctx: CommandContext, args: str) -> None:
+    """检查运行环境是否就绪，输出逐项诊断结果。"""
+    import shutil
+    import sys
+
+    ok = "[bold green]✓[/bold green]"
+    fail = "[bold red]✗[/bold red]"
+    warn = "[bold yellow]⚠[/bold yellow]"
+
+    log.info("Coco 环境诊断 (/doctor)\n")
+
+    # 1. Python 版本
+    vi = sys.version_info
+    if vi >= (3, 10):
+        log.info(f"  {ok} Python {vi.major}.{vi.minor}.{vi.micro}  (≥ 3.10 ✓)")
+    else:
+        log.info(f"  {fail} Python {vi.major}.{vi.minor}.{vi.micro}  (需要 3.10+)")
+
+    # 2. API 密钥
+    key = (ctx.settings.api_key or "").strip()
+    if key:
+        masked = key[:8] + "…" + key[-4:]
+        log.info(f"  {ok} API 密钥已配置  ({ctx.settings.provider.value}: {masked})")
+    else:
+        log.info(f"  {fail} API 密钥未配置  — 请设置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY")
+
+    # 3. 模型
+    if ctx.settings.model:
+        log.info(f"  {ok} 模型: {ctx.settings.model}  (max_tokens={ctx.settings.max_tokens:,})")
+    else:
+        log.info(f"  {fail} 模型未配置")
+
+    # 4. 工作区
+    ws = ctx.workspace
+    if ws.is_dir():
+        log.info(f"  {ok} 工作区可访问: {ws}")
+    else:
+        log.info(f"  {fail} 工作区不存在: {ws}")
+
+    # 5. prompt_toolkit（REPL 历史 / Tab 补全）
+    try:
+        import prompt_toolkit  # noqa: F401
+        log.info(f"  {ok} prompt_toolkit 已安装  (历史记录与 Tab 补全可用)")
+    except ImportError:
+        log.info(f"  {warn} prompt_toolkit 未安装  — REPL 将降级为 input()")
+
+    # 6. Git
+    if shutil.which("git"):
+        log.info(f"  {ok} git 可用  (系统提示将包含分支与状态)")
+    else:
+        log.info(f"  {warn} git 未找到  — 系统提示中将跳过 git 摘要")
+
+    # 7. PowerShell（Shell 工具依赖）
+    if shutil.which("pwsh") or shutil.which("powershell"):
+        log.info(f"  {ok} PowerShell 可用")
+    else:
+        log.info(f"  {warn} PowerShell 未找到  — Shell 工具可能无法执行命令")
+
+    # 8. 数据目录可写
+    try:
+        from .paths import data_home, ensure_dir
+        dh = ensure_dir(data_home())
+        probe = dh / ".coco_write_test"
+        probe.write_text("ok")
+        probe.unlink()
+        log.info(f"  {ok} 数据目录可写: {dh}")
+    except Exception as e:
+        log.info(f"  {fail} 数据目录写入失败: {e}")
+
+    log.info("")
+
+
 _COMMAND_HELP: list[tuple[str, str]] = [
     ("help", "显示本列表"),
+    ("doctor", "环境诊断：检查 API 密钥、依赖、工作区等"),
     ("clear", "清空上下文并开始新会话"),
     ("history", "列出当前工作区已保存会话"),
     ("resume", "恢复会话：/resume <序号|id 前缀>"),
@@ -267,6 +340,7 @@ _COMMAND_HELP: list[tuple[str, str]] = [
 _COMMANDS: dict[str, CommandHandler] = {
     "help": _cmd_help,
     "?": _cmd_help,
+    "doctor": _cmd_doctor,
     "clear": _cmd_clear,
     "history": _cmd_history,
     "resume": _cmd_resume,
