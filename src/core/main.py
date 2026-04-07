@@ -320,8 +320,18 @@ def entry() -> None:
             _start_spinner("执行工具…")
 
         with EscListener(on_cancel=engine.abort) as listener:
-            perms.pause_fn = listener.pause
-            perms.resume_fn = listener.resume
+            # pause_fn：权限确认前先停 spinner，再暂停 ESC 监听，保证 input() 不被 Live 撕碎
+            # resume_fn：确认完成后恢复监听并重启 spinner
+            def _perms_pause() -> None:
+                _stop_spinner()
+                listener.pause()
+
+            def _perms_resume() -> None:
+                listener.resume()
+                _start_spinner("执行工具…")
+
+            perms.pause_fn = _perms_pause
+            perms.resume_fn = _perms_resume
             _start_spinner()
             try:
                 result = engine.run(

@@ -33,6 +33,7 @@ else:
 # ── 模型 → max_tokens 推荐值（首个前缀匹配即生效）─────────────────────
 
 _MAX_TOKENS_TABLE: tuple[tuple[str, int], ...] = (
+    # Anthropic Claude
     ("claude-opus-4-6",    64_000),
     ("claude-sonnet-4-6",  32_000),
     ("claude-opus-4-5",    32_000),
@@ -43,6 +44,15 @@ _MAX_TOKENS_TABLE: tuple[tuple[str, int], ...] = (
     ("claude-3-5-sonnet",   8_192),
     ("claude-3-5-haiku",    8_192),
     ("claude-3-haiku",      4_096),
+    # Qwen / DashScope（OpenAI 兼容）
+    ("qwen-max",            8_192),
+    ("qwen-plus",           8_192),
+    ("qwen-turbo",          8_192),
+    ("qwen-long",           8_192),
+    ("qwen2.5",             8_192),
+    ("qwen2",               8_192),
+    ("qwen-vl",             8_192),
+    ("qwen",                8_192),
 )
 
 # ── 环境变量 → 配置键映射 ────────────────────────────────────────────
@@ -136,7 +146,7 @@ def _from_cli(args: Namespace) -> dict:
 
 # ── 辅助解析 ─────────────────────────────────────────────────────────
 
-_FALLBACK_MAX_TOKENS = 16_384
+_FALLBACK_MAX_TOKENS = 8_192   # 保守兜底；未知模型通常支持 8192，需要更多时用 COCO_MAX_TOKENS 覆盖
 
 
 def _infer_max_tokens(model: str) -> int:
