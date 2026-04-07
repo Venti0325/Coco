@@ -1,3 +1,5 @@
+[![CI](https://github.com/Venti0325/Coco/actions/workflows/ci.yml/badge.svg)](https://github.com/Venti0325/Coco/actions/workflows/ci.yml)
+
 # Coco
 基于终端的轻量化 AI 编程助手：配置合并、双后端 LLM、工具循环、会话持久化与斜杠命令。
 
