@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from core.config import _infer_max_tokens, load_settings
+from core.config import _FALLBACK_MAX_TOKENS, _MAX_TOKENS_TABLE, _infer_max_tokens, load_settings
 from core.models import Provider
 
 
@@ -31,13 +31,22 @@ def _clear_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key, raising=False)
 
 
-def test_infer_max_tokens_claude_sonnet_family():
-    assert _infer_max_tokens("claude-sonnet-4-6") == 32_000
-    assert _infer_max_tokens("claude-opus-4-6") == 64_000
+@pytest.mark.parametrize("prefix, expected", _MAX_TOKENS_TABLE)
+def test_infer_max_tokens_table_prefix_match(prefix: str, expected: int):
+    """表中每个前缀恰好命中自身，返回对应限制值。"""
+    assert _infer_max_tokens(prefix) == expected
+    # 加后缀仍能命中同一前缀
+    assert _infer_max_tokens(prefix + "-extra-suffix-20991231") == expected
 
 
-def test_infer_max_tokens_unknown_model_fallback():
-    assert _infer_max_tokens("qwen-plus-2025-07-28") == 16_384
+def test_infer_max_tokens_unknown_model_uses_fallback():
+    """完全不在表中的模型名返回 _FALLBACK_MAX_TOKENS。"""
+    assert _infer_max_tokens("totally-unknown-model-xyz") == _FALLBACK_MAX_TOKENS
+
+
+def test_infer_max_tokens_fallback_is_conservative():
+    """兜底值不超过 8192，避免超出未知模型的实际输出上限。"""
+    assert _FALLBACK_MAX_TOKENS <= 8_192
 
 
 def test_load_settings_defaults_isolated(
