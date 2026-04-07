@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
@@ -153,15 +154,22 @@ def _cmd_workspace(ctx: CommandContext, args: str) -> None:
         log.dim("（已在该工作区。）")
         return
 
-    # 1) 更新 workspace
+    # 1) 切换 OS 进程 cwd——工具解析相对路径时依赖 os.getcwd()，必须同步
+    try:
+        os.chdir(target)
+    except OSError as e:
+        log.warn(f"切换目录失败：{e}")
+        return
+
+    # 2) 更新 workspace
     ctx.workspace = target
 
-    # 2) 清空上下文并创建新会话（会话目录按 workspace 隔离）
+    # 3) 清空上下文并创建新会话（会话目录按 workspace 隔离）
     ctx.state.chat_messages.clear()
     ctx.state.pending_input = None
     ctx.state.session_store = SessionStore(ctx.workspace, ctx.settings.model)
 
-    # 3) 重建 system_prompt：base + skills（bundled + user + new project）
+    # 4) 重建 system_prompt：base + skills（bundled + user + new project）
     try:
         from .context import build_system_prompt
         from .skills import build_skills_prompt_section, clear_skills, discover_skills
