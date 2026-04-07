@@ -137,3 +137,74 @@ def test_e2e_long_dialog_compact_then_continue(tmp_path: Path):
     result = eng.run("continue", prior_messages=compacted)
     assert result.answer == "continue ok"
 
+
+def test_e2e_engine_allowed_tools_blocks_disallowed_tool(tmp_path: Path):
+    f = tmp_path / "x.txt"
+    f.write_text("hi\n", encoding="utf-8")
+
+    llm = ScriptedLLM(
+        [
+            LLMResponse(
+                content=[
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "Edit",
+                        "input": {"file_path": str(f), "old_string": "hi", "new_string": "bye"},
+                    }
+                ]
+            ),
+            LLMResponse(content=[{"type": "text", "text": "done"}]),
+        ]
+    )
+
+    eng = Engine(
+        llm,
+        [FileEditTool()],
+        permissions=PermissionChecker(auto_approve=True),
+        allowed_tools={"Read"},  # disallow Edit
+    )
+    result = eng.run("try edit")
+    # 被拦截后仍能继续完成一轮（下一次 LLM 返回文本）
+    assert result.answer == "done"
+    assert "not allowed" in str(result.messages[-2]["content"]).lower() or "not allowed" in "".join(result.tool_log).lower()
+
+
+def test_e2e_engine_allowed_paths_blocks_disallowed_path(tmp_path: Path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "src").mkdir()
+    allowed_file = ws / "src" / "ok.txt"
+    allowed_file.write_text("ok\n", encoding="utf-8")
+    blocked_file = ws / "tests.txt"
+    blocked_file.write_text("no\n", encoding="utf-8")
+
+    llm = ScriptedLLM(
+        [
+            LLMResponse(
+                content=[
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "Read",
+                        "input": {"file_path": str(blocked_file)},
+                    }
+                ]
+            ),
+            LLMResponse(content=[{"type": "text", "text": "done"}]),
+        ]
+    )
+
+    eng = Engine(
+        llm,
+        [FileReadTool()],
+        permissions=PermissionChecker(auto_approve=True),
+        workspace=ws,
+        allowed_paths=["src/"],
+    )
+    result = eng.run("try read")
+    assert result.answer == "done"
+    # Tool result should have been blocked
+    prev = str(result.messages[-2]["content"]).lower()
+    assert "not allowed" in prev or "allowed prefixes" in prev
+

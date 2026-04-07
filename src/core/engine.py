@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .llm import LLMClient
 from .models import TokenUsage
@@ -89,6 +90,9 @@ class Engine:
         max_steps: int = _MAX_STEPS_DEFAULT,
         system: str | None = None,
         permissions: PermissionChecker | None = None,
+        allowed_tools: set[str] | None = None,
+        workspace: Path | None = None,
+        allowed_paths: list[str] | None = None,
     ) -> None:
         self._llm = llm
         self._tools = list(tools)
@@ -97,6 +101,11 @@ class Engine:
         self._system = system or _SYSTEM
         self._api_tools = _anthropic_tool_defs(self._tools)
         self._permissions = permissions or PermissionChecker()
+        self._allowed_tools = {t for t in (allowed_tools or set()) if t} or None
+        self._workspace = workspace.resolve() if workspace is not None else None
+        self._allowed_paths = [p for p in (allowed_paths or []) if isinstance(p, str) and p.strip()]
+        if self._allowed_paths and self._workspace is None:
+            raise ValueError("allowed_paths requires workspace to be set.")
 
     def run(
         self,
@@ -105,6 +114,64 @@ class Engine:
         prior_messages: list[dict] | None = None,
     ) -> EngineResult:
         return self._run_tool_loop(user_text, prior_messages=prior_messages)
+
+    def _path_allowed_for_tool(self, tool_name: str, inp: dict) -> tuple[bool, str]:
+        if not self._allowed_paths:
+            return True, ""
+        if self._workspace is None:
+            return False, "Error: workspace is not set for path enforcement."
+
+        # Only enforce for filesystem tools (KISS): Read/Glob/Grep/Write/Edit
+        key: str | None
+        if tool_name in ("Read", "Write", "Edit"):
+            key = "file_path"
+        elif tool_name in ("Glob", "Grep"):
+            key = "path"
+        else:
+            return True, ""
+
+        raw = inp.get(key) if key else None
+        if raw is None:
+            raw = "."
+        if not isinstance(raw, str) or not raw.strip():
+            raw = "."
+
+        try:
+            p = Path(raw)
+            target = (self._workspace / p).resolve() if not p.is_absolute() else p.resolve()
+        except Exception:
+            allowed = ", ".join(self._allowed_paths)
+            return False, f"Error: invalid path for tool {tool_name!r}. Allowed prefixes: {allowed}"
+
+        allowed_roots: list[Path] = []
+        for pref in self._allowed_paths:
+            pref = pref.strip()
+            if not pref:
+                continue
+            try:
+                allowed_roots.append((self._workspace / pref).resolve())
+            except Exception:
+                continue
+        if not allowed_roots:
+            allowed = ", ".join(self._allowed_paths)
+            return False, f"Error: no valid allowed_paths configured. Allowed prefixes: {allowed}"
+
+        def _is_under(child: Path, parent: Path) -> bool:
+            try:
+                child.relative_to(parent)
+                return True
+            except Exception:
+                return False
+
+        ok = any(_is_under(target, root) for root in allowed_roots)
+        if ok:
+            return True, ""
+        allowed = ", ".join(self._allowed_paths)
+        return (
+            False,
+            f"Error: path is not allowed for tool {tool_name!r}: {str(target)}. "
+            f"Allowed prefixes (relative to workspace): {allowed}",
+        )
 
     def _run_tool_loop(
         self,
@@ -150,15 +217,22 @@ class Engine:
                 tool = self._by_name.get(name)
                 if tool is None:
                     body = f"Error: unknown tool {name!r}"
-                elif not tool.is_read_only and self._permissions.check(tool, inp) == "deny":
-                    body = "Error: User denied permission to run this tool."
+                elif self._allowed_tools is not None and name not in self._allowed_tools:
+                    allowed = ", ".join(sorted(self._allowed_tools))
+                    body = f"Error: tool {name!r} is not allowed in this context. Allowed: {allowed}"
                 else:
-                    out = tool.invoke(inp)
-                    body = (
-                        out.content
-                        if out.success
-                        else (out.error or out.content or "Error")
-                    )
+                    ok, msg = self._path_allowed_for_tool(name, inp)
+                    if not ok:
+                        body = msg
+                    elif not tool.is_read_only and self._permissions.check(tool, inp) == "deny":
+                        body = "Error: User denied permission to run this tool."
+                    else:
+                        out = tool.invoke(inp)
+                        body = (
+                            out.content
+                            if out.success
+                            else (out.error or out.content or "Error")
+                        )
                 if not isinstance(body, str):
                     body = str(body)
                 result_blocks.append(

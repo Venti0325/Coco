@@ -15,7 +15,7 @@ if sys.platform == "win32":
     os.environ.setdefault("PYTHONUTF8", "1")
 
 from core import __version__
-from core.paths import config_home, data_home, ensure_dir
+from core.paths import config_home, data_home, ensure_dir, history_file, state_home
 from core.config import load_settings
 from core.models import AppSettings
 from core.commands import CommandContext, ReplState, dispatch_slash
@@ -36,6 +36,77 @@ from core.tools import (
     ShellTool,
 )
 from core import log
+
+# ── prompt_toolkit（可选，缺失时降级为 input()）─────────────────────────
+try:
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.completion import Completer, Completion
+    from prompt_toolkit.document import Document
+    from prompt_toolkit.history import FileHistory
+    _PT_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _PT_AVAILABLE = False
+
+
+class _SlashCommandCompleter(Completer):
+    """斜杠命令 Tab 补全；仅当输入以 '/' 开头时触发。"""
+
+    _BUILTIN: list[tuple[str, str]] = [
+        ("help",      "显示所有可用命令"),
+        ("clear",     "清空上下文并开始新会话"),
+        ("history",   "列出已保存的会话"),
+        ("resume",    "恢复会话"),
+        ("compact",   "压缩对话上下文"),
+        ("skills",    "列出可用技能"),
+        ("workspace", "切换工作区"),
+        ("cd",        "切换工作区（同 workspace）"),
+        ("exit",      "退出 REPL"),
+    ]
+
+    def get_completions(self, document: "Document", complete_event):  # type: ignore[override]
+        text = document.text_before_cursor.lstrip()
+        if not text.startswith("/"):
+            return
+        query = text[1:].lower()
+        builtin_names: set[str] = set()
+        for name, desc in self._BUILTIN:
+            builtin_names.add(name)
+            if not query or name.startswith(query):
+                yield Completion(
+                    f"/{name}",
+                    start_position=-len(text),
+                    display=f"/{name}",
+                    display_meta=desc,
+                )
+        try:
+            from core.skills import list_skills
+            for skill in list_skills(user_invocable_only=True):
+                if skill.name in builtin_names:
+                    continue
+                if not query or skill.name.startswith(query):
+                    yield Completion(
+                        f"/{skill.name}",
+                        start_position=-len(text),
+                        display=f"/{skill.name}",
+                        display_meta=(skill.description or "skill")[:40],
+                    )
+        except Exception:
+            pass
+
+
+def _build_prompt_session() -> "PromptSession | None":  # type: ignore[type-arg]
+    """创建 prompt_toolkit 会话（含历史文件与斜杠补全）；不可用时返回 None。"""
+    if not _PT_AVAILABLE:
+        return None
+    try:
+        ensure_dir(state_home())
+        return PromptSession(
+            history=FileHistory(str(history_file())),
+            completer=_SlashCommandCompleter(),
+            complete_while_typing=False,
+        )
+    except Exception:
+        return None
 
 
 # ── 启动诊断 ──────────────────────────────────────────────────────────
@@ -154,19 +225,29 @@ def entry() -> None:
 
     compact_service = CompactService(client)
 
-    def _make_engine(system: str) -> Engine:
+    def _make_engine(
+        system: str,
+        *,
+        allowed_tools: set[str] | None = None,
+        workspace: Path | None = None,
+        allowed_paths: list[str] | None = None,
+    ) -> Engine:
+        ws = (workspace or Path.cwd()).resolve()
         return Engine(
             client,
             [
                 FileReadTool(),
                 GlobTool(),
                 GrepTool(),
-                ShellTool(workspace),
+                ShellTool(ws),
                 FileWriteTool(),
                 FileEditTool(),
             ],
             system=system,
             permissions=perms,
+            allowed_tools=allowed_tools,
+            workspace=ws,
+            allowed_paths=allowed_paths,
         )
 
     def _run_query(
@@ -198,14 +279,28 @@ def entry() -> None:
         *,
         skill_name: str,
         skill_prompt: str,
+        allowed_tools: set[str] | None,
+        allowed_paths: list[str] | None,
+        disable_model_invocation: bool,
+        workspace: Path,
         system: str,
         chat_messages: list,
         session_store: SessionStore,
     ) -> None:
         """以隔离上下文执行 skill，并把最终结果回注到原会话。"""
         snapshot = list(chat_messages)
+        if disable_model_invocation:
+            log.warn(f"技能 /{skill_name} 标记为 disable_model_invocation，已跳过执行。")
+            return
         try:
-            result = _make_engine(system).run(skill_prompt, prior_messages=None)
+            result = _make_engine(
+                system,
+                allowed_tools=allowed_tools,
+                workspace=workspace,
+                allowed_paths=allowed_paths,
+            ).run(
+                skill_prompt, prior_messages=None
+            )
         except Exception as exc:
             log.error(f"技能 /{skill_name} 执行失败: {LLMClient.error_message(exc)}")
             return
@@ -270,7 +365,12 @@ def entry() -> None:
         if not _api_configured(settings):
             log.error("需要配置 API 密钥后才能执行 one-shot 请求。")
             sys.exit(1)
-        _run_query(_make_engine(system_prompt), args.prompt, chat_messages=[], session_store=None)
+        _run_query(
+            _make_engine(system_prompt, workspace=workspace),
+            args.prompt,
+            chat_messages=[],
+            session_store=None,
+        )
     else:
         if not _api_configured(settings):
             log.error("需要配置 API 密钥；配置后可交互输入，或传入 prompt 参数。")
@@ -309,11 +409,20 @@ def entry() -> None:
             system_prompt=system_prompt,
         )
 
+        pt_session = _build_prompt_session()
+
         while True:
             try:
-                line = input("> ")
+                if pt_session is not None:
+                    line = pt_session.prompt("> ")
+                else:
+                    line = input("> ")
             except EOFError:
                 break
+            except KeyboardInterrupt:
+                log.dim("（已取消，输入 exit 退出）")
+                log.info("")
+                continue
             text = line.strip()
             if not text:
                 continue
@@ -328,13 +437,19 @@ def entry() -> None:
                 # skills 可能将待执行输入写入 pending_input
                 pending_fork = repl_state.pending_fork
                 repl_state.pending_fork = None
+                pending_skill = repl_state.pending_skill
+                repl_state.pending_skill = None
                 pending = repl_state.pending_input
                 repl_state.pending_input = None
                 if pending_fork:
-                    name, prompt = pending_fork
+                    sk, prompt = pending_fork
                     _run_skill_fork(
-                        skill_name=name,
+                        skill_name=sk.name,
                         skill_prompt=prompt,
+                        allowed_tools=set(sk.allowed_tools) if sk.allowed_tools else None,
+                        allowed_paths=list(sk.paths) if sk.paths else None,
+                        disable_model_invocation=bool(sk.disable_model_invocation),
+                        workspace=cmd_ctx.workspace,
                         system=cmd_ctx.system_prompt or system_prompt,
                         chat_messages=repl_state.chat_messages,
                         session_store=repl_state.session_store,
@@ -358,8 +473,24 @@ def entry() -> None:
                 system=cmd_ctx.system_prompt or system_prompt,
             )
 
+            # inline skill 约束：allowed_tools / disable_model_invocation
+            allowed_tools = None
+            allowed_paths = None
+            if pending_skill is not None:
+                if pending_skill.disable_model_invocation:
+                    log.warn(f"技能 /{pending_skill.name} 标记为 disable_model_invocation，已跳过执行。")
+                    log.info("")
+                    continue
+                allowed_tools = set(pending_skill.allowed_tools) if pending_skill.allowed_tools else None
+                allowed_paths = list(pending_skill.paths) if pending_skill.paths else None
+
             _run_query(
-                _make_engine(cmd_ctx.system_prompt or system_prompt),
+                _make_engine(
+                    cmd_ctx.system_prompt or system_prompt,
+                    allowed_tools=allowed_tools,
+                    workspace=cmd_ctx.workspace,
+                    allowed_paths=allowed_paths,
+                ),
                 text,
                 chat_messages=repl_state.chat_messages,
                 session_store=repl_state.session_store,

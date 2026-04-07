@@ -27,7 +27,8 @@ class ReplState:
     chat_messages: list
     session_store: SessionStore
     pending_input: str | None = None
-    pending_fork: tuple[str, str] | None = None  # (skill_name, prompt)
+    pending_fork: tuple[Skill, str] | None = None  # (skill, prompt)
+    pending_skill: Skill | None = None  # for inline skill execution
 
 
 @dataclass
@@ -235,10 +236,11 @@ def _execute_skill(skill: Skill, args: str, ctx: CommandContext) -> None:
         log.dim(f"（技能 /{skill.name} 未生成有效提示词）")
         return
     if (skill.context or "inline").lower() == "fork":
-        ctx.state.pending_fork = (skill.name, prompt)
+        ctx.state.pending_fork = (skill, prompt)
         log.dim(f"已启动技能（fork）：/{skill.name}")
     else:
         # inline：让 REPL 把 skill prompt 当作一次普通用户输入执行
+        ctx.state.pending_skill = skill
         ctx.state.pending_input = prompt
         log.dim(f"已运行技能：/{skill.name}")
 

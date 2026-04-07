@@ -142,6 +142,6 @@ def test_dispatch_skill_fork_sets_pending_fork(tmp_path: Path):
 
     assert dispatch_slash(ctx, "/forkit hello") == "handled"
     assert st.pending_fork is not None
-    name, prompt = st.pending_fork
-    assert name == "forkit"
+    sk, prompt = st.pending_fork
+    assert sk.name == "forkit"
     assert "hello" in prompt
