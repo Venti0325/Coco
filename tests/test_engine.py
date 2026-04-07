@@ -34,6 +34,28 @@ class EchoTool(Tool):
         )
 
 
+class _MockStream:
+    """把一个 LLMResponse 包装成 engine 期望的流式上下文管理器。"""
+
+    def __init__(self, response: LLMResponse) -> None:
+        self._response = response
+        self.text_stream = iter(
+            b["text"] for b in response.content if b.get("type") == "text"
+        )
+
+    def __enter__(self) -> "_MockStream":
+        return self
+
+    def __exit__(self, *_args) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def get_final_message(self) -> LLMResponse:
+        return self._response
+
+
 def _make_llm_mock(
     responses: list[LLMResponse],
     prov: Provider = Provider.ANTHROPIC,
@@ -44,8 +66,8 @@ def _make_llm_mock(
     class _Fake:
         provider = prov
 
-        def complete(self, **kwargs):
-            return next(it)
+        def stream(self, **kwargs):
+            return _MockStream(next(it))
 
     return _Fake()
 

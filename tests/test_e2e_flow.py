@@ -14,14 +14,36 @@ from core.tools.file_read import FileReadTool
 from core.tools.grep_tool import GrepTool
 
 
+class _MockStream:
+    """把一个 LLMResponse 包装成 engine 期望的流式上下文管理器。"""
+
+    def __init__(self, response: LLMResponse) -> None:
+        self._response = response
+        self.text_stream = iter(
+            b["text"] for b in response.content if b.get("type") == "text"
+        )
+
+    def __enter__(self) -> "_MockStream":
+        return self
+
+    def __exit__(self, *_args) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def get_final_message(self) -> LLMResponse:
+        return self._response
+
+
 class ScriptedLLM:
     """按顺序返回预设响应，用于端到端主链路测试。"""
 
     def __init__(self, responses: list[LLMResponse]):
         self._it = iter(responses)
 
-    def complete(self, **_kwargs) -> LLMResponse:
-        return next(self._it)
+    def stream(self, **_kwargs) -> _MockStream:
+        return _MockStream(next(self._it))
 
 
 def test_e2e_read_only_read_then_grep_then_answer(tmp_path: Path):
