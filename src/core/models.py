@@ -10,6 +10,12 @@ from dataclasses import dataclass
 from enum import Enum
 
 
+# ── 异常 ─────────────────────────────────────────────────────────────
+
+class AbortedError(Exception):
+    """用户主动中止当前请求（ESC / Ctrl+C）。"""
+
+
 # ── 供应商 / LLM ─────────────────────────────────────────────────────
 
 class Provider(str, Enum):

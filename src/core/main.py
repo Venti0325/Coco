@@ -17,7 +17,7 @@ if sys.platform == "win32":
 from core import __version__
 from core.paths import config_home, data_home, ensure_dir, history_file, state_home
 from core.config import load_settings
-from core.models import AppSettings
+from core.models import AbortedError, AppSettings
 from core.commands import CommandContext, ReplState, dispatch_slash
 from core.compact import AUTO_COMPACT_MESSAGE_LIMIT, CompactService, should_compact_by_message_count
 from core.context import build_system_prompt
@@ -36,6 +36,7 @@ from core.tools import (
     ShellTool,
 )
 from core import log
+from core._keylistener import EscListener
 
 # ── prompt_toolkit（可选，缺失时降级为 input()）─────────────────────────
 try:
@@ -258,11 +259,20 @@ def entry() -> None:
         session_store: SessionStore | None,
     ) -> bool:
         """返回是否成功完成一轮（用于决定是否写会话）。"""
-        try:
-            result = engine.run(text, prior_messages=chat_messages or None)
-        except Exception as exc:
-            log.error(f"请求失败: {LLMClient.error_message(exc)}")
-            return False
+        with EscListener(on_cancel=engine.abort) as listener:
+            perms.pause_fn = listener.pause
+            perms.resume_fn = listener.resume
+            try:
+                result = engine.run(text, prior_messages=chat_messages or None)
+            except AbortedError:
+                log.warn("已中止（ESC）")
+                return False
+            except Exception as exc:
+                log.error(f"请求失败: {LLMClient.error_message(exc)}")
+                return False
+            finally:
+                perms.pause_fn = None
+                perms.resume_fn = None
         for line in result.tool_log:
             log.dim(line)
         if args.print_mode:

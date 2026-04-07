@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Callable, Literal
 
 from . import log
 from .tools.base import Tool
@@ -16,6 +16,9 @@ class PermissionChecker:
     def __init__(self, auto_approve: bool = False) -> None:
         self._auto_approve = auto_approve
         self._always_allow: set[str] = set()
+        # EscListener 在请求期间会设置这两个钩子，防止 msvcrt 偷走 input() 按键
+        self.pause_fn: Callable[[], None] | None = None
+        self.resume_fn: Callable[[], None] | None = None
 
     def check(self, tool: Tool, inputs: dict) -> PermissionDecision:
         if tool.is_read_only:
@@ -44,17 +47,23 @@ class PermissionChecker:
                 s = s[:197] + "..."
             log.dim(f"  {key}: {s}")
         log.info("")
-        while True:
-            try:
-                line = input("允许执行? [y]es / [n]o / [a]lways: ").strip().lower()
-            except EOFError:
-                log.dim("(EOF → 拒绝)")
-                return "deny"
-            if line in ("y", "yes"):
-                return "allow"
-            if line in ("n", "no", ""):
-                return "deny"
-            if line in ("a", "always"):
-                self._always_allow.add(tool.spec.name)
-                return "allow"
-            log.dim("请输入 y / yes、n / no 或 a / always")
+        if self.pause_fn:
+            self.pause_fn()
+        try:
+            while True:
+                try:
+                    line = input("允许执行? [y]es / [n]o / [a]lways: ").strip().lower()
+                except EOFError:
+                    log.dim("(EOF → 拒绝)")
+                    return "deny"
+                if line in ("y", "yes"):
+                    return "allow"
+                if line in ("n", "no", ""):
+                    return "deny"
+                if line in ("a", "always"):
+                    self._always_allow.add(tool.spec.name)
+                    return "allow"
+                log.dim("请输入 y / yes、n / no 或 a / always")
+        finally:
+            if self.resume_fn:
+                self.resume_fn()

@@ -11,12 +11,13 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from typing import Any, Iterator
 
 import anthropic
 
-from .models import AppSettings, Provider, TokenUsage
+from .models import AbortedError, AppSettings, Provider, TokenUsage
 
 # ── OpenAI 可选导入（未安装时降级为 None）────────────────────────────
 
@@ -328,13 +329,20 @@ class LLMClient:
         messages: list[dict[str, Any]],
         system: str | None = None,
         tools: list[dict[str, Any]] | None = None,
+        abort_event: threading.Event | None = None,
     ) -> LLMResponse:
-        """消费完整流并返回最终消息（engine 一轮调用）。"""
+        """消费完整流并返回最终消息（engine 一轮调用）。
+
+        若提供 abort_event，每个 chunk 到来前都检测；一旦置位立即关闭流并抛出
+        AbortedError。
+        """
         with self.stream(
             messages=messages, system=system, tools=tools,
         ) as stream:
             for _ in stream.text_stream:
-                pass
+                if abort_event is not None and abort_event.is_set():
+                    stream.close()
+                    raise AbortedError("用户中止")
             return stream.get_final_message()
 
     def is_auth_error(self, exc: Exception) -> bool:

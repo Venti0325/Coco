@@ -9,12 +9,13 @@ Anthropic 与 **OpenAI 兼容**（含 DashScope / Qwen 等）共用同一套内�
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .llm import LLMClient
-from .models import TokenUsage
+from .models import AbortedError, TokenUsage
 from .permissions import PermissionChecker
 from .tools.base import Tool
 
@@ -106,6 +107,11 @@ class Engine:
         self._allowed_paths = [p for p in (allowed_paths or []) if isinstance(p, str) and p.strip()]
         if self._allowed_paths and self._workspace is None:
             raise ValueError("allowed_paths requires workspace to be set.")
+        self._abort_event = threading.Event()
+
+    def abort(self) -> None:
+        """从任意线程调用，中止当前飞行中的请求。"""
+        self._abort_event.set()
 
     def run(
         self,
@@ -113,6 +119,7 @@ class Engine:
         *,
         prior_messages: list[dict] | None = None,
     ) -> EngineResult:
+        self._abort_event.clear()
         return self._run_tool_loop(user_text, prior_messages=prior_messages)
 
     def _path_allowed_for_tool(self, tool_name: str, inp: dict) -> tuple[bool, str]:
@@ -186,10 +193,13 @@ class Engine:
         usage_acc: TokenUsage | None = None
 
         for _ in range(self._max_steps):
+            if self._abort_event.is_set():
+                raise AbortedError("用户中止")
             resp = self._llm.complete(
                 messages=messages,
                 system=self._system,
                 tools=self._api_tools,
+                abort_event=self._abort_event,
             )
             usage_acc = _merge_usage(usage_acc, resp.usage)
             blocks = list(resp.content)
