@@ -58,6 +58,9 @@ class _SlashCommandCompleter(Completer):
 
     _BUILTIN: list[tuple[str, str]] = [
         ("help",      "显示所有可用命令"),
+        ("model",     "查看或切换模型"),
+        ("init",      "扫描项目并生成 COCO.md"),
+        ("doctor",    "环境诊断"),
         ("clear",     "清空上下文并开始新会话"),
         ("history",   "列出已保存的会话"),
         ("resume",    "恢复会话"),
@@ -498,6 +501,7 @@ def entry() -> None:
             state=repl_state,
             compact_service=compact_service,
             system_prompt=system_prompt,
+            llm_client=client,
         )
 
         pt_session = _build_prompt_session()
@@ -587,6 +591,11 @@ def entry() -> None:
                 chat_messages=repl_state.chat_messages,
                 session_store=repl_state.session_store,
             )
+            # /init 等命令会在 pending_input 运行后注册回调（例如更新 system_prompt）
+            if repl_state.post_run_callback is not None:
+                cb = repl_state.post_run_callback
+                repl_state.post_run_callback = None
+                cb()
             log.info("")
 
 

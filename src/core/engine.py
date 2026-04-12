@@ -138,6 +138,14 @@ class Engine:
         """从任意线程调用，中止当前飞行中的请求。"""
         self._abort_event.set()
 
+    def get_model(self) -> str:
+        """返回当前生效的模型名。"""
+        return self._llm.get_model()
+
+    def set_model(self, model: str, max_tokens: int | None = None) -> None:
+        """热切换模型（影响后续请求）。"""
+        self._llm.set_model(model, max_tokens)
+
     def _max_steps_for_turn(self, user_text: str) -> int:
         """启发式判断本轮是简单还是复杂任务，返回对应步数上限。
 

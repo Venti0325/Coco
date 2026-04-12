@@ -285,6 +285,18 @@ class LLMClient:
     def __init__(self, backend, settings: AppSettings):
         self._backend = backend
         self._settings = settings
+        self._model: str = settings.model
+        self._max_tokens: int = settings.max_tokens
+
+    def get_model(self) -> str:
+        """返回当前生效的模型名（可能已被 set_model 覆盖）。"""
+        return self._model
+
+    def set_model(self, model: str, max_tokens: int | None = None) -> None:
+        """热切换模型（影响后续所有请求）；可同步更新 max_tokens。"""
+        self._model = model
+        if max_tokens is not None:
+            self._max_tokens = max_tokens
 
     @classmethod
     def from_settings(cls, settings: AppSettings) -> "LLMClient":
@@ -315,8 +327,8 @@ class LLMClient:
         Anthropic / OpenAI 均会携带 ``tools``（若提供）。
         """
         return self._backend.stream(
-            model=self._settings.model,
-            max_tokens=self._settings.max_tokens,
+            model=self._model,
+            max_tokens=self._max_tokens,
             messages=messages,
             system=system,
             tools=tools,

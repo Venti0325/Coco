@@ -9,6 +9,13 @@
 
 ---
 
+## 2026-04-12
+
+- **(done)** 测试规范化：`tests/test_config.py` 改用 `@pytest.mark.parametrize` 遍历 `_MAX_TOKENS_TABLE`，删除针对特定模型名的硬编码断言
+- **(done)** 实现 `/model` 命令：Anthropic provider 键盘交互选择列表；其他 provider 文本直切；`/model <名称>` 直接切换并同步推断 `max_tokens`
+- **(done)** 实现 `/init` 命令：agent 自动执行 Glob → Read → Write 生成 `COCO.md`；完成后热刷新 `system_prompt`；支持 `--force` 强制覆盖
+- **(done)** 基础设施：`LLMClient` 添加 `get_model()`/`set_model()`；`Engine` 透传；`ReplState` 添加 `post_run_callback`；`CommandContext` 添加 `llm_client`
+
 ## 2026-04-08
 
 - **(planned)** OpenRouter 接入（一等公民 provider 支持）→ [sessions/2026-04-08.md](sessions/2026-04-08.md)

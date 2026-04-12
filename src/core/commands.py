@@ -6,9 +6,12 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Literal
+from typing import TYPE_CHECKING, Callable, Literal
+
+if TYPE_CHECKING:
+    from .llm import LLMClient
 
 from . import log
 from .models import AppSettings
@@ -30,6 +33,7 @@ class ReplState:
     pending_input: str | None = None
     pending_fork: tuple[Skill, str] | None = None  # (skill, prompt)
     pending_skill: Skill | None = None  # for inline skill execution
+    post_run_callback: Callable[[], None] | None = None  # 下一轮 run 结束后执行
 
 
 @dataclass
@@ -39,6 +43,7 @@ class CommandContext:
     state: ReplState
     compact_service: CompactService | None = None
     system_prompt: str = ""
+    llm_client: "LLMClient | None" = field(default=None, repr=False)
 
 
 def parse_command(text: str) -> tuple[str, str] | None:
@@ -253,6 +258,197 @@ def _execute_skill(skill: Skill, args: str, ctx: CommandContext) -> None:
         log.dim(f"已运行技能：/{skill.name}")
 
 
+_INIT_PROMPT = """\
+Initialize Coco for this project by creating a COCO.md file in the project root.
+
+Steps:
+1. Use Glob("**/*") to discover key config files: pyproject.toml, package.json, \
+build.gradle, Cargo.toml, go.mod, CMakeLists.txt, requirements.txt, Makefile, \
+Dockerfile, .github/workflows/*.yml, etc.
+2. Use Read on the found config files to extract: language/runtime version, \
+framework, dependencies, test command, build/run command.
+3. Use Glob with the detected language extension (e.g. "**/*.py") to understand \
+the directory structure — do NOT read every file.
+4. Write COCO.md to the project root using the Write tool.
+
+COCO.md format (keep it under 80 lines, be concise):
+
+```markdown
+# COCO.md — Project Instructions for Coco
+
+## Project
+<one-line description of what this project does>
+
+## Stack
+- Language: <language + version>
+- Framework: <framework if any>
+- Key dependencies: <2-4 most important libs>
+
+## Commands
+- Test:  <test command>
+- Run:   <run command>
+- Build: <build command if applicable>
+- Lint:  <lint/format command if applicable>
+
+## Structure
+<3-6 bullet points describing key directories/files>
+
+## Guidelines
+<3-6 project-specific coding rules or conventions you detected>
+```
+
+After writing COCO.md, print a brief summary of what you detected and confirm \
+the file was created.\
+"""
+
+
+def _cmd_init(ctx: CommandContext, args: str) -> None:
+    """扫描项目并生成 COCO.md（项目级指令文件）。"""
+    coco_md = ctx.workspace / "COCO.md"
+    if coco_md.exists() and args.strip().lower() not in ("--force", "-f"):
+        log.warn(
+            "COCO.md 已存在。  如需重新生成，请使用 [bold]/init --force[/bold]。"
+        )
+        return
+
+    log.dim("正在扫描项目并生成 COCO.md…（通过 agent 执行，需要若干工具调用）")
+    ctx.state.pending_input = _INIT_PROMPT
+
+    def _post_init() -> None:
+        if coco_md.exists():
+            log.info("[bold]COCO.md 已创建。[/bold]  正在更新系统提示词…")
+            try:
+                from .context import build_system_prompt
+                from .skills import build_skills_prompt_section
+                sp = build_system_prompt(ctx.workspace)
+                skills_section = build_skills_prompt_section()
+                if skills_section:
+                    sp = sp + "\n\n" + skills_section
+                ctx.system_prompt = sp
+            except Exception:
+                pass
+        else:
+            log.warn("COCO.md 未创建——请检查上方输出。")
+
+    ctx.state.post_run_callback = _post_init
+
+
+def _cmd_model(ctx: CommandContext, args: str) -> None:
+    """查看或切换模型。
+
+    有参数时直接切换；无参数且 provider=anthropic 时展示交互式选择列表。
+    """
+    from .config import _infer_max_tokens
+
+    client = ctx.llm_client
+    if client is None:
+        log.warn("无法获取 LLM 客户端引用（llm_client 未注入）。")
+        return
+
+    current = client.get_model()
+
+    # 有参数 → 直接切换
+    if args.strip():
+        model = args.strip()
+        max_t = _infer_max_tokens(model)
+        client.set_model(model, max_t)
+        log.info(f"已切换模型为 [bold]{model}[/bold]  (max_tokens={max_t:,})")
+        return
+
+    # 非 Anthropic → 纯文本提示
+    if ctx.settings.provider.value != "anthropic":
+        log.info(f"当前模型：{current}")
+        log.dim(f"  使用 /model <名称> 切换（provider={ctx.settings.provider.value}）")
+        return
+
+    # Anthropic → prompt_toolkit 交互选择
+    try:
+        from prompt_toolkit import Application
+        from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.layout import Layout
+        from prompt_toolkit.layout.containers import Window
+        from prompt_toolkit.layout.controls import FormattedTextControl
+    except ImportError:
+        log.info(f"当前模型：{current}")
+        log.dim("  使用 /model <名称> 直接切换（prompt_toolkit 未安装，无法显示列表）")
+        return
+
+    # (model_name, label, description)
+    _OPTIONS = [
+        ("claude-sonnet-4-6", "Sonnet 4.6",  "推荐日常使用 · $3/$15 per Mtok"),
+        ("claude-opus-4-6",   "Opus 4.6",    "最强推理，复杂任务 · $15/$75 per Mtok"),
+        ("claude-sonnet-4-5", "Sonnet 4.5",  "上代 Sonnet · $3/$15 per Mtok"),
+        ("claude-3-5-haiku",  "Haiku 3.5",   "最快最省，简单任务 · $0.8/$4 per Mtok"),
+    ]
+
+    cursor = [0]
+    for i, (name, _, _) in enumerate(_OPTIONS):
+        if name == current:
+            cursor[0] = i
+            break
+
+    result: list[str | None] = [None]
+    max_label = max(len(label) for _, label, _ in _OPTIONS)
+    kb = KeyBindings()
+
+    @kb.add("up")
+    def _(e): cursor.__setitem__(0, (cursor[0] - 1) % len(_OPTIONS))
+
+    @kb.add("down")
+    def _(e): cursor.__setitem__(0, (cursor[0] + 1) % len(_OPTIONS))
+
+    @kb.add("enter")
+    def _(e):
+        result[0] = _OPTIONS[cursor[0]][0]
+        e.app.exit()
+
+    for i in range(min(len(_OPTIONS), 9)):
+        @kb.add(str(i + 1))
+        def _(e, idx=i):
+            cursor[0] = idx
+            result[0] = _OPTIONS[idx][0]
+            e.app.exit()
+
+    @kb.add("escape")
+    @kb.add("c-c")
+    def _(e): e.app.exit()
+
+    def _tokens():
+        t: list = [
+            ("bold ansibrightcyan", "  选择模型 / Select model\n"),
+            ("ansigray", "  ↑↓ 移动  · 数字键直选  · ↵ 确认  · ESC 取消\n\n"),
+        ]
+        for i, (name, label, desc) in enumerate(_OPTIONS):
+            is_cur = i == cursor[0]
+            is_active = name == current
+            ptr = "❯" if is_cur else " "
+            sty = "ansibrightcyan" if is_cur else ""
+            chk = " ✔" if is_active else ""
+            padded = (label + chk).ljust(max_label + 3)
+            t.append((sty, f"  {ptr} {i + 1}. {padded}"))
+            t.append(("ansigray", desc + "\n"))
+        return t
+
+    app: Application = Application(
+        layout=Layout(Window(FormattedTextControl(_tokens))),
+        key_bindings=kb,
+        full_screen=False,
+    )
+    try:
+        app.run()
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+    if result[0] is None:
+        log.dim(f"未更改，保持为 {current}")
+        return
+
+    model = result[0]
+    max_t = _infer_max_tokens(model)
+    client.set_model(model, max_t)
+    log.info(f"已切换模型为 [bold]{model}[/bold]  (max_tokens={max_t:,})")
+
+
 def _cmd_doctor(ctx: CommandContext, args: str) -> None:
     """检查运行环境是否就绪，输出逐项诊断结果。"""
     import shutil
@@ -328,6 +524,8 @@ def _cmd_doctor(ctx: CommandContext, args: str) -> None:
 _COMMAND_HELP: list[tuple[str, str]] = [
     ("help", "显示本列表"),
     ("doctor", "环境诊断：检查 API 密钥、依赖、工作区等"),
+    ("model", "查看或切换模型：/model <名称>，无参数时显示选择列表"),
+    ("init", "扫描项目并生成 COCO.md：/init [--force]"),
     ("clear", "清空上下文并开始新会话"),
     ("history", "列出当前工作区已保存会话"),
     ("resume", "恢复会话：/resume <序号|id 前缀>"),
@@ -341,6 +539,8 @@ _COMMANDS: dict[str, CommandHandler] = {
     "help": _cmd_help,
     "?": _cmd_help,
     "doctor": _cmd_doctor,
+    "model": _cmd_model,
+    "init": _cmd_init,
     "clear": _cmd_clear,
     "history": _cmd_history,
     "resume": _cmd_resume,
