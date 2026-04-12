@@ -11,9 +11,10 @@
 
 ## 2026-04-12
 
-- **(done)** 测试规范化：`tests/test_config.py` 改用 `@pytest.mark.parametrize` 遍历 `_MAX_TOKENS_TABLE`，删除针对特定模型名的硬编码断言
-- **(done)** 实现 `/model` 命令：Anthropic provider 键盘交互选择列表；其他 provider 文本直切；`/model <名称>` 直接切换并同步推断 `max_tokens`
-- **(done)** 实现 `/init` 命令：agent 自动执行 Glob → Read → Write 生成 `COCO.md`；完成后热刷新 `system_prompt`；支持 `--force` 强制覆盖
+- **(done)** 跨平台兼容：`shell.py` 按平台选择 shell（Windows → pwsh/powershell；Linux/macOS → bash/sh），危险命令拦截分平台规则，允许列表补充 `python3`/`pip3`/`make`/`cargo`/`go`；`_cmd_doctor` Shell 检测适配 Unix；CI 矩阵新增 `ubuntu-latest`
+- **(done)** 测试规范化：`tests/test_config.py` 改用 `@pytest.mark.parametrize` 遍历 `_MAX_TOKENS_TABLE`，删除针对特定模型名的硬编码断言；新增 `test_infer_max_tokens_fallback_is_conservative` 守护兜底值上限
+- **(done)** 实现 `/model` 命令：Anthropic provider 键盘交互选择列表（↑↓/数字键/↵）；其他 provider 文本直切；`/model <名称>` 直接切换并同步推断 `max_tokens`
+- **(done)** 实现 `/init` 命令：agent 自动执行 Glob → Read → Write 生成 `COCO.md`；完成后经 `post_run_callback` 热刷新 `system_prompt`；支持 `--force` 强制覆盖
 - **(done)** 基础设施：`LLMClient` 添加 `get_model()`/`set_model()`；`Engine` 透传；`ReplState` 添加 `post_run_callback`；`CommandContext` 添加 `llm_client`
 
 ## 2026-04-08

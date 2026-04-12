@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -9,13 +11,39 @@ from .base import Tool, ToolOutcome, ToolSpec
 
 _DEFAULT_TIMEOUT = 120
 _MAX_OUTPUT_CHARS = 20_000
+_IS_WINDOWS = sys.platform == "win32"
 
-# 允许的命令前缀（大小写不敏感，按规范化空白后的字符串匹配）
+
+# ── 平台感知 Shell 选择 ───────────────────────────────────────────────
+
+def _find_shell() -> list[str]:
+    """返回当前平台可用的 shell 调用前缀（传给 subprocess.run 的 args 头部）。
+
+    - Windows：优先 pwsh（PowerShell 7+），退回 powershell
+    - Unix：优先 bash，退回 sh
+    """
+    if _IS_WINDOWS:
+        exe = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
+        return [exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
+    else:
+        exe = shutil.which("bash") or "sh"
+        return [exe, "-c"]
+
+
+_SHELL_PREFIX: list[str] = _find_shell()
+_SHELL_NAME: str = _SHELL_PREFIX[0]
+
+
+# ── 允许的命令前缀白名单 ──────────────────────────────────────────────
+
 _ALLOWED_PREFIXES: tuple[str, ...] = (
     "pytest",
     "python -m pytest",
+    "python3 -m pytest",
     "python -m pip",
+    "python3 -m pip",
     "pip",
+    "pip3",
     "git status",
     "git diff",
     "git log",
@@ -25,15 +53,33 @@ _ALLOWED_PREFIXES: tuple[str, ...] = (
     "node",
     "npm",
     "pnpm",
+    "make",
+    "cargo test",
+    "cargo build",
+    "go test",
+    "go build",
 )
 
-# 极简危险命令拦截（宁愿误杀也不要静默放行破坏性命令）。
-# 目标：拦截明显的破坏/关机/格式化/递归删除等高风险操作。
-_DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\b(format|shutdown|restart-computer|stop-computer)\b", re.I), "system power/format"),
-    (re.compile(r"\brm\b\s+-rf\b", re.I), "rm -rf"),
+# ── 危险命令拦截 ──────────────────────────────────────────────────────
+
+# 跨平台危险模式
+_DANGEROUS_COMMON: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\brm\s+-[^\s]*r[^\s]*f\b|\brm\s+-[^\s]*f[^\s]*r\b|\brm\s+-rf\b", re.I), "rm -rf"),
+    (re.compile(r"\bdd\b.*\bof=/dev/", re.I), "raw disk write (dd)"),
+]
+
+# Windows 专属危险模式
+_DANGEROUS_WINDOWS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b(shutdown|restart-computer|stop-computer)\b", re.I), "system power"),
+    (re.compile(r"\bformat\b.*\b[a-z]:", re.I), "disk format"),
     (re.compile(r"\bClear-Content\b", re.I), "destructive content clear"),
-    (re.compile(r"\bSet-Content\b.*\\\\\\\\\.\\\\", re.I), "raw device write"),
+]
+
+# Unix 专属危险模式
+_DANGEROUS_UNIX: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bmkfs\b", re.I), "filesystem format (mkfs)"),
+    (re.compile(r":\(\)\s*\{.*:\|:.*\}", re.I), "fork bomb"),
+    (re.compile(r"\bchmod\s+-R\s+777\s+/\b", re.I), "chmod 777 /"),
 ]
 
 
@@ -47,23 +93,33 @@ def _truncate(text: str, *, limit: int = _MAX_OUTPUT_CHARS) -> tuple[str, bool]:
 
 def _is_dangerous(command: str) -> str | None:
     low = command.lower()
-    # 递归/强制删除：PowerShell
-    if "remove-item" in low and ("-recurse" in low or "-force" in low):
-        return "recursive delete"
-    # 递归删除：cmd 风格
-    if ("rmdir" in low or re.search(r"\brd\b", low)) and ("/s" in low or "/q" in low):
-        return "recursive delete"
-    if any(k in low for k in (" del ", " erase ")):
-        if "/s" in low or "/q" in low or "/f" in low:
-            return "recursive delete"
-    for pat, reason in _DANGEROUS_PATTERNS:
+
+    # 跨平台检查
+    for pat, reason in _DANGEROUS_COMMON:
         if pat.search(command):
             return reason
+
+    if _IS_WINDOWS:
+        # PowerShell 递归删除
+        if "remove-item" in low and ("-recurse" in low or "-force" in low):
+            return "recursive delete"
+        if ("rmdir" in low or re.search(r"\brd\b", low)) and ("/s" in low or "/q" in low):
+            return "recursive delete"
+        if any(k in low for k in (" del ", " erase ")):
+            if "/s" in low or "/q" in low or "/f" in low:
+                return "recursive delete"
+        for pat, reason in _DANGEROUS_WINDOWS:
+            if pat.search(command):
+                return reason
+    else:
+        for pat, reason in _DANGEROUS_UNIX:
+            if pat.search(command):
+                return reason
+
     return None
 
 
 def _normalize_command(s: str) -> str:
-    # collapse whitespace; keep it simple and deterministic
     return " ".join((s or "").strip().split())
 
 
@@ -89,10 +145,11 @@ class ShellTool(Tool):
 
     @property
     def spec(self) -> ToolSpec:
+        shell_hint = "PowerShell" if _IS_WINDOWS else "bash/sh"
         return ToolSpec(
             name="Shell",
             description=(
-                "Execute a PowerShell command. Returns stdout + stderr. "
+                f"Execute a shell command ({shell_hint}). Returns stdout + stderr. "
                 "Timeout defaults to 120s. Avoid interactive commands."
             ),
             input_schema={
@@ -100,7 +157,7 @@ class ShellTool(Tool):
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "The PowerShell command to execute",
+                        "description": "The shell command to execute",
                     },
                     "cwd": {
                         "type": "string",
@@ -159,14 +216,7 @@ class ShellTool(Tool):
 
         try:
             result = subprocess.run(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-Command",
-                    command,
-                ],
+                [*_SHELL_PREFIX, command],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -186,7 +236,6 @@ class ShellTool(Tool):
                 parts.append(f"[stderr]\n{err_text}")
 
             if result.returncode != 0:
-                # 非 0 明确标记为错误，便于模型/用户立即识别
                 parts.append(f"[exit code: {result.returncode}]")
 
             return ToolOutcome(
@@ -197,6 +246,7 @@ class ShellTool(Tool):
                     "truncated_stdout": out_trunc,
                     "truncated_stderr": err_trunc,
                     "cwd": str(cwd),
+                    "shell": _SHELL_NAME,
                 },
             )
         except subprocess.TimeoutExpired:
@@ -208,8 +258,7 @@ class ShellTool(Tool):
         except FileNotFoundError:
             return ToolOutcome(
                 success=False,
-                content="Error: powershell not found on PATH",
+                content=f"Error: shell not found on PATH ({_SHELL_NAME})",
             )
         except Exception as exc:
             return ToolOutcome(success=False, content=f"Error: {exc}")
-

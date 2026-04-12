@@ -501,11 +501,20 @@ def _cmd_doctor(ctx: CommandContext, args: str) -> None:
     else:
         log.info(f"  {warn} git 未找到  — 系统提示中将跳过 git 摘要")
 
-    # 7. PowerShell（Shell 工具依赖）
-    if shutil.which("pwsh") or shutil.which("powershell"):
-        log.info(f"  {ok} PowerShell 可用")
+    # 7. Shell 可执行程序
+    import sys as _sys
+    if _sys.platform == "win32":
+        shell_exe = shutil.which("pwsh") or shutil.which("powershell")
+        if shell_exe:
+            log.info(f"  {ok} PowerShell 可用  ({shell_exe})")
+        else:
+            log.info(f"  {fail} PowerShell 未找到  — Shell 工具将无法执行命令")
     else:
-        log.info(f"  {warn} PowerShell 未找到  — Shell 工具可能无法执行命令")
+        shell_exe = shutil.which("bash") or shutil.which("sh")
+        if shell_exe:
+            log.info(f"  {ok} Shell 可用  ({shell_exe})")
+        else:
+            log.info(f"  {fail} bash/sh 未找到  — Shell 工具将无法执行命令")
 
     # 8. 数据目录可写
     try:

@@ -20,6 +20,7 @@ Small typo or one-line fixes can skip the session note, but should still leave t
 
 ## Build, Test, and Run Commands
 
+**Windows (PowerShell)**
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -30,11 +31,20 @@ coco
 coco "one-shot prompt"
 ```
 
-CI runs `pytest tests/ -v --tb=short` on Python 3.10 and 3.12, on `windows-latest`.
+**Linux / macOS**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+pytest tests/ -v
+coco
+```
+
+CI runs `pytest tests/ -v --tb=short` on Python 3.10 and 3.12, on both `windows-latest` and `ubuntu-latest`.
 
 ## Architecture Notes
 
-The key seam is that `engine.py` uses Anthropic-style internal messages for every provider, while `llm.py` translates to and from OpenAI-compatible chat completions when needed. Keep tool schemas in Anthropic shape internally and let `llm.py` adapt them. `config.py` implements a 5-layer merge: defaults, user TOML, project TOML, env vars, then CLI args. `session.py` and `paths.py` store session data by workspace. `tools/shell.py` is PowerShell-based and should be treated as Windows-first.
+The key seam is that `engine.py` uses Anthropic-style internal messages for every provider, while `llm.py` translates to and from OpenAI-compatible chat completions when needed. Keep tool schemas in Anthropic shape internally and let `llm.py` adapt them. `config.py` implements a 5-layer merge: defaults, user TOML, project TOML, env vars, then CLI args. `session.py` and `paths.py` store session data by workspace. `tools/shell.py` auto-detects the platform shell at startup: PowerShell (`pwsh`/`powershell`) on Windows, bash/sh on Linux/macOS.
 
 ## Coding Style & Naming Conventions
 
@@ -50,4 +60,4 @@ Recent commits use short prefixes such as `feat:`, `fix:`, `fix(tool):`, and `do
 
 ## Security & Environment Notes
 
-Never commit real API keys or `.env` files; use `.env.example` as the template. When adding subprocess calls, prefer UTF-8-safe handling because the project targets Windows terminals first.
+Never commit real API keys or `.env` files; use `.env.example` as the template. When adding subprocess calls, use UTF-8-safe handling and prefer the platform-detected shell from `tools/shell.py` rather than hardcoding a shell name.

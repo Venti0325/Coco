@@ -3,21 +3,29 @@
 # Coco
 基于终端的轻量化 AI 编程助手：双后端 LLM、工具循环、会话持久化与斜杠命令。
 
+支持 **Windows / Linux / macOS**。
+
 ---
 
 ## ⚡ 30 秒快速开始
 
+**Windows（PowerShell）**
 ```powershell
-# 1. 创建虚拟环境并安装
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 
-# 2. 配置 API 密钥（任选其一）
-$env:ANTHROPIC_API_KEY = "sk-ant-..."          # Anthropic Claude
-$env:OPENAI_API_KEY    = "sk-..."              # OpenAI / DashScope / Qwen 等
+$env:ANTHROPIC_API_KEY = "sk-ant-..."   # 或 OPENAI_API_KEY
+coco
+```
 
-# 3. 启动
+**Linux / macOS（bash/zsh）**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+export ANTHROPIC_API_KEY="sk-ant-..."   # 或 OPENAI_API_KEY
 coco
 ```
 
@@ -31,6 +39,7 @@ coco
   ✓ 工作区可访问
   ✓ prompt_toolkit 已安装
   ✓ git 可用
+  ✓ Shell 可用  (/bin/bash)
 ```
 
 ---
@@ -39,7 +48,8 @@ coco
 
 **① 了解一个新项目（探索类）**
 ```
-> /cd D:\my-project
+> /cd ~/my-project          # Linux/macOS
+> /cd D:\my-project         # Windows
 > 这是个什么项目，阅读重要文件告诉我
 ```
 
@@ -49,7 +59,7 @@ coco
 ```
 
 **③ one-shot 脚本模式（不开 REPL）**
-```powershell
+```bash
 coco "列出 src/ 下所有超过 200 行的 Python 文件"
 ```
 
@@ -57,7 +67,7 @@ coco "列出 src/ 下所有超过 200 行的 Python 文件"
 
 ## 环境要求
 
-- Python 3.10+（Windows 为主要目标平台）
+- Python 3.10+
 - **Anthropic** 或 **OpenAI 兼容 API**（如阿里云 DashScope / Qwen）
 - 可选：`git`（用于在系统提示中注入分支与状态；不存在则自动跳过）
 
@@ -65,17 +75,55 @@ coco "列出 src/ 下所有超过 200 行的 Python 文件"
 
 ## 安装
 
+**Windows（PowerShell）**
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
+copy .env.example .env   # 用编辑器打开 .env 填写密钥
 ```
 
-复制环境变量模板并填写密钥：
+**Linux / macOS**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env     # 用编辑器打开 .env 填写密钥
+```
 
+---
+
+## 日常启动
+
+安装完成后，每次使用只需两步：**激活虚拟环境 → 运行 coco**。
+
+**Windows（PowerShell）**
 ```powershell
-copy .env.example .env   # 然后用编辑器打开 .env 填写密钥
+# 进入项目目录
+cd D:\resumeProject\claude_code\Coco_plus
+
+# 激活虚拟环境
+.\.venv\Scripts\Activate.ps1
+
+# 启动（在你想作为工作区的目录下运行）
+cd D:\your-project
+coco
 ```
+
+**Linux / macOS**
+```bash
+# 进入项目目录
+cd ~/claude_code/Coco_plus
+
+# 激活虚拟环境
+source .venv/bin/activate
+
+# 启动（在你想作为工作区的目录下运行）
+cd ~/your-project
+coco
+```
+
+> **提示**：`coco` 以**启动时的当前目录**作为工作区根，工具调用（Read/Glob/Shell 等）都在这个目录下操作。启动后也可用 `/cd <路径>` 随时切换工作区。
 
 ---
 
@@ -108,7 +156,7 @@ COCO_MODEL=qwen-plus
 
 ## 使用方式
 
-```powershell
+```bash
 coco                    # 交互 REPL
 coco "你的问题"         # one-shot（不写会话文件）
 coco --resume <会话ID>  # 进入 REPL 并加载该会话
@@ -131,7 +179,9 @@ coco --auto-approve     # 跳过 Write/Edit/Shell 的终端确认（慎用）
 | 命令 | 说明 |
 |------|------|
 | `/help` | 列出命令 |
-| `/doctor` | **环境诊断**：检查 API 密钥、依赖、工作区、git 等 |
+| `/doctor` | **环境诊断**：检查 API 密钥、依赖、工作区、git、shell 等 |
+| `/model [名称]` | 查看或切换模型（Anthropic 提供交互选择列表） |
+| `/init [--force]` | 扫描项目并生成 `COCO.md` |
 | `/clear` | 新开会话（新 session id） |
 | `/history` | 当前工作区下的已保存会话列表 |
 | `/resume <序号或 id 前缀>` | 切换到指定会话 |
@@ -144,6 +194,7 @@ coco --auto-approve     # 跳过 Write/Edit/Shell 的终端确认（慎用）
 ## 功能概览
 
 - **工具**：Read、Glob、Grep（只读）；Shell、Write、Edit（需确认或使用 `--auto-approve`）
+- **Shell**：Windows 使用 PowerShell（`pwsh`/`powershell`），Linux/macOS 使用 bash/sh；自动探测
 - **Engine**：多轮工具循环（简单/复杂任务自动切换步数上限）；Anthropic 与 OpenAI 兼容
 - **流式输出**：回答逐字显示，工具调用实时展示
 - **系统提示（context）**：工作目录、日期、可选 git 摘要、可选 **`COCO.md`** / **`CLAUDE.md`**
@@ -190,13 +241,13 @@ $env:PYTHONUTF8 = "1"
 coco
 ```
 
-或在 `.env` 中加入 `PYTHONUTF8=1`。
+或在 `.env` 中加入 `PYTHONUTF8=1`（Linux/macOS 通常无需此步骤）。
 
 ---
 
 ## 运行测试
 
-```powershell
+```bash
 pytest tests/ -v
 ```
 
@@ -209,17 +260,17 @@ src/core/
   main.py         – CLI、REPL、会话与 engine 接线
   config.py       – 分层配置
   context.py      – 运行时 system 提示拼装
-  commands.py     – 斜杠命令解析与分发（含 /doctor）
+  commands.py     – 斜杠命令解析与分发（含 /doctor、/model、/init）
   engine.py       – agent 工具循环（含简单/复杂双档步数）
   llm.py          – Anthropic / OpenAI 兼容客户端与消息转换
   session.py      – 会话 JSONL + meta
   permissions.py  – 非只读工具终端确认
-  paths.py        – 配置/数据/会话路径
+  paths.py        – 配置/数据/会话路径（XDG 风格，跨平台）
   models.py       – 配置与用量等类型
   log.py          – Rich 控制台封装
   _keylistener.py – ESC 中止监听（Windows msvcrt / Unix termios）
-  tools/          – 各工具实现
-tests/            – pytest
+  tools/          – 各工具实现（shell.py 自动探测平台 shell）
+tests/            – pytest（Windows + Linux CI）
 ```
 
 ---
