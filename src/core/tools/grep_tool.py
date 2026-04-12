@@ -10,6 +10,8 @@ from typing import Any
 
 from .base import Tool, ToolOutcome, ToolSpec
 
+_MAX_FILE_BYTES = 1 * 1024 * 1024  # 1 MB：超过此大小的文件跳过全量读取
+
 
 def _fail(message: str) -> ToolOutcome:
     return ToolOutcome(success=False, content=message, error=message)
@@ -116,12 +118,16 @@ class GrepTool(Tool):
                 text=True,
                 timeout=30,
             )
+            # exit 0 = matches found, exit 1 = no matches, exit 2 = error
+            if result.returncode == 2:
+                err = (result.stderr or "").strip()
+                return _fail(f"Error: rg failed: {err or 'unknown error'}")
             output = result.stdout.strip()
             text = output if output else "No matches found."
             return ToolOutcome(success=True, content=text)
         except FileNotFoundError:
             return self._python_grep(
-                pattern, path, glob_filter, case_insensitive, output_mode
+                pattern, path, glob_filter, case_insensitive, output_mode, context
             )
         except subprocess.TimeoutExpired:
             return _fail("Error: Search timed out.")
@@ -133,6 +139,7 @@ class GrepTool(Tool):
         glob_filter: str | None,
         case_insensitive: bool,
         output_mode: str,
+        context: int = 0,
     ) -> ToolOutcome:
         base = Path(path)
         flags = re.IGNORECASE if case_insensitive else 0
@@ -157,14 +164,32 @@ class GrepTool(Tool):
         for f in files:
             if not f.is_file():
                 continue
+            # 跳过超大文件，避免内存压力
+            try:
+                if f.stat().st_size > _MAX_FILE_BYTES:
+                    continue
+            except OSError:
+                continue
             try:
                 text = f.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
             if output_mode == "content":
-                for lineno, line in enumerate(text.splitlines(), 1):
+                lines = text.splitlines()
+                for lineno, line in enumerate(lines, 1):
                     if regex.search(line):
-                        matched.append(f"{f}:{lineno}:{line}")
+                        if context:
+                            # 提取上下文行
+                            start = max(0, lineno - 1 - context)
+                            end = min(len(lines), lineno + context)
+                            ctx_lines = [
+                                f"{f}:{i + 1}:{'>' if i + 1 == lineno else '-'}{lines[i]}"
+                                for i in range(start, end)
+                            ]
+                            matched.extend(ctx_lines)
+                            matched.append("--")  # 分隔符，对齐 rg 输出风格
+                        else:
+                            matched.append(f"{f}:{lineno}:{line}")
             elif regex.search(text):
                 matched.append(str(f))
 

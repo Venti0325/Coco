@@ -11,6 +11,7 @@
 
 ## 2026-04-12
 
+- **(done)** 工具稳健性：`GlobTool` 结果截断至 500 条并给出提示；`GrepTool` 检测 `rg` exit code 2 返回错误信息、Python fallback 补上 `-C` 上下文行、单文件读取限制 1 MB
 - **(done)** 跨平台兼容：`shell.py` 按平台选择 shell（Windows → pwsh/powershell；Linux/macOS → bash/sh），危险命令拦截分平台规则，允许列表补充 `python3`/`pip3`/`make`/`cargo`/`go`；`_cmd_doctor` Shell 检测适配 Unix；CI 矩阵新增 `ubuntu-latest`
 - **(done)** 测试规范化：`tests/test_config.py` 改用 `@pytest.mark.parametrize` 遍历 `_MAX_TOKENS_TABLE`，删除针对特定模型名的硬编码断言；新增 `test_infer_max_tokens_fallback_is_conservative` 守护兜底值上限
 - **(done)** 实现 `/model` 命令：Anthropic provider 键盘交互选择列表（↑↓/数字键/↵）；其他 provider 文本直切；`/model <名称>` 直接切换并同步推断 `max_tokens`

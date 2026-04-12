@@ -8,6 +8,8 @@ from typing import Any
 
 from .base import Tool, ToolOutcome, ToolSpec
 
+_MAX_RESULTS = 500
+
 
 def _fail(message: str) -> ToolOutcome:
     return ToolOutcome(success=False, content=message, error=message)
@@ -29,7 +31,8 @@ class GlobTool(Tool):
             name="Glob",
             description=(
                 "Find files matching a glob pattern. "
-                "Returns paths sorted by modification time (newest first)."
+                "Returns paths sorted by modification time (newest first). "
+                f"Results are capped at {_MAX_RESULTS} entries."
             ),
             input_schema={
                 "type": "object",
@@ -76,4 +79,13 @@ class GlobTool(Tool):
 
         if not matches:
             return ToolOutcome(success=True, content="No files found matching the pattern.")
-        return ToolOutcome(success=True, content="\n".join(matches))
+
+        truncated = len(matches) > _MAX_RESULTS
+        shown = matches[:_MAX_RESULTS]
+        content = "\n".join(shown)
+        if truncated:
+            content += (
+                f"\n\n[Results truncated: showing {_MAX_RESULTS} of {len(matches)} matches. "
+                "Use a more specific pattern to narrow results.]"
+            )
+        return ToolOutcome(success=True, content=content)
