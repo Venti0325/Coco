@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -168,19 +169,34 @@ def test_shell_nonzero_exit_code_includes_exit_code():
 
 
 def test_shell_timeout():
-    r = ShellTool(Path.cwd()).invoke({"command": "pytest --version; Start-Sleep -Seconds 2", "timeout": 1})
+    # 超时测试：让 shell 先跑一个快速命令，再 sleep，确认超时错误
+    if sys.platform == "win32":
+        cmd = "pytest --version; Start-Sleep -Seconds 2"
+    else:
+        cmd = "pytest --version; sleep 2"
+    r = ShellTool(Path.cwd()).invoke({"command": cmd, "timeout": 1})
     assert not r.success
     assert "timed out" in r.content.lower()
 
 
 def test_shell_blocks_dangerous_command():
-    r = ShellTool(Path.cwd()).invoke({"command": "Remove-Item -Recurse -Force C:\\\\"})
+    # 平台对应的危险命令：应被拦截并返回 "blocked"
+    if sys.platform == "win32":
+        cmd = "Remove-Item -Recurse -Force C:\\\\"
+    else:
+        cmd = "rm -rf /"
+    r = ShellTool(Path.cwd()).invoke({"command": cmd})
     assert not r.success
     assert "blocked" in r.content.lower()
 
 
 def test_shell_blocks_command_not_in_allowlist():
-    r = ShellTool(Path.cwd()).invoke({"command": 'Write-Output "hi"'})
+    # allowlist 不做硬拦截；非白名单命令仍可运行（权限确认由 PermissionChecker 负责）
+    if sys.platform == "win32":
+        cmd = 'Write-Output "hi"'
+    else:
+        cmd = 'echo "hi"'
+    r = ShellTool(Path.cwd()).invoke({"command": cmd})
     assert r.success
     assert "hi" in r.content.lower()
 
