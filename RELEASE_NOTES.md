@@ -1,6 +1,6 @@
 # Release Notes — Coco **v0.1.2-alpha**
 
-跨平台终端 AI 编程助手（预发布版本）。支持 **Windows / Linux / macOS**。行为以源码与测试为准。
+终端 AI 编程助手（预发布版本）。当前版本仅支持 **Windows（PowerShell）**。行为以源码与测试为准。
 
 ---
 
@@ -11,11 +11,7 @@
 - **`/init [--force]`** — 扫描项目并让 agent 自动生成 `COCO.md`（执行 Glob → Read → Write 工具链）；生成后立即热刷新当前会话的系统提示，无需重启。`--force` 可覆盖已有文件。
 
 ### 跨平台支持
-- **Shell 工具**现在自动探测平台 shell：Windows 使用 `pwsh`/`powershell`，Linux/macOS 使用 `bash`/`sh`（`shutil.which` 运行时探测）。
-- 危险命令拦截分平台规则：保留 Windows 专属模式（`Remove-Item -Recurse` 等），新增 Unix 专属模式（`rm -rf`、`mkfs`、`dd of=/dev/` 等），跨平台模式独立一层。
-- Shell 白名单补充 `python3`、`pip3`、`make`、`cargo test/build`、`go test/build`。
-- `/doctor` Shell 检测在 Unix 下改为探测 `bash`/`sh`，提示更准确。
-- **CI 矩阵**扩展为 `windows-latest` + `ubuntu-latest`，覆盖 Python 3.10 / 3.12（共 4 个 job）。
+-（本版本说明以 Windows 为准）**Shell 工具**使用 PowerShell（`pwsh`/`powershell`），带超时、输出截断、危险命令拦截与 `cwd` 限制。
 
 ### 其他改进
 - `LLMClient` 添加 `get_model()` / `set_model()` 支持运行时热切换，`Engine` 透传。
@@ -30,10 +26,12 @@
 - **双后端 LLM**：Anthropic Messages API；OpenAI 兼容（含 DashScope / Qwen 等）。
 - **工具循环（Agent）**：模型可多次调用工具，直到返回纯文本回答；带步数上限，避免死循环。
 - **内置工具**：Read、Glob、Grep（只读）；Write、Edit（需确认或使用 `--auto-approve`）；**Shell**（自动探测平台；带超时与输出截断）。
-- **权限**：非只读工具在终端确认（`y` / `n` / `always`）；Shell 对**非白名单前缀**会额外提示风险，仍由你决定。
+- **权限**：非只读工具支持两种确认方式：
+  - 终端确认（`y` / `n` / `always`）
+  - **灵动岛（GUI）权限弹窗**（可用时优先；tkinter 不可用则自动回退到终端）
 - **会话**：按工作区隔离的 JSONL + meta；`/history`、`/resume`；启动可用 `--resume`。
 - **上下文压缩**：手动 `/compact`；按消息条数在请求前**自动 compact**。
-- **Skills**：内置与磁盘加载；`/<skill>` 执行；支持 **`context: fork`** 的隔离执行，结果回注到主会话。
+- **Skills**：内置与磁盘加载；`/<skill>` 执行；支持 **`context: fork`** 的隔离执行，结果回注到主会话；支持 `allowed_tools` 与 `paths` 的运行时约束（enforcement）。
 - **工作区**：`/workspace` 或 `/cd` 切换目录（清空上下文并开新会话）。
 - **系统提示**：工作目录、日期、可选 git 摘要、可选项目说明文件（`COCO.md` / `CLAUDE.md`）。
 - **模型切换**：`/model` 热切换（见上方新增内容）。
@@ -43,9 +41,9 @@
 
 ## 当前不支持什么
 
-- **图形化 UI**：无 GUI 权限弹窗；全部为终端交互。
+- **完整 GUI 客户端**：灵动岛仅是轻量悬浮窗；不提供“完整图形界面应用”。
 - **MCP / 浏览器 / 远程沙箱**：未集成。
-- **Skills 的强约束执行**：`allowed_tools`、`disable_model_invocation` 等字段**未做严格 enforcement**（仅作元数据/提示）。
+- **Skills 的全部约束语义**：已支持 `allowed_tools` 与 `paths` 的 enforcement；`model` 覆盖等能力仍待补齐。
 - **全自动"安全执行"**：危险命令在 Shell 层会拦截；其余仍依赖你的确认与模型行为。
 
 ---

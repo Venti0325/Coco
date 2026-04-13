@@ -9,6 +9,13 @@
 
 ---
 
+## 2026-04-13
+
+- **(done)** skills：补齐 `paths` 约束的运行时 enforcement（Read/Glob/Grep/Write/Edit），并确保 inline/fork 两种执行模式都能透传约束；新增 e2e 回归测试覆盖“越界路径被拦截但主链路仍可继续”
+- **(done)** `/skills` 输出增强：从单行列表改为更易读的多行块展示（name + description），新增单测
+- **(done)** 灵动岛：迁入 `core/island.py`（tkinter 悬浮窗，working/done/notify/permission），并在主链路接入 request working 状态、异常 notify、GUI 权限确认（不可用自动回退终端）；退出时 stop
+- **(done)** 文档对齐：README / RELEASE_NOTES 文案更新为 Windows-only（PowerShell），补充灵动岛与 skills 约束能力说明
+
 ## 2026-04-12
 
 - **(done)** 工具稳健性：`GlobTool` 结果截断至 500 条并给出提示；`GrepTool` 检测 `rg` exit code 2 返回错误信息、Python fallback 补上 `-C` 上下文行、单文件读取限制 1 MB

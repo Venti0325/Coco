@@ -13,9 +13,10 @@ PermissionDecision = Literal["allow", "deny"]
 class PermissionChecker:
     """进程内白名单；无持久化、无 GUI。"""
 
-    def __init__(self, auto_approve: bool = False) -> None:
+    def __init__(self, auto_approve: bool = False, *, island=None) -> None:
         self._auto_approve = auto_approve
         self._always_allow: set[str] = set()
+        self._island = island
         # EscListener 在请求期间会设置这两个钩子，防止 msvcrt 偷走 input() 按键
         self.pause_fn: Callable[[], None] | None = None
         self.resume_fn: Callable[[], None] | None = None
@@ -31,6 +32,21 @@ class PermissionChecker:
         return self._prompt(tool, inputs)
 
     def _prompt(self, tool: Tool, inputs: dict) -> PermissionDecision:
+        # Prefer GUI permission dialog if DynamicIsland is available.
+        island = self._island
+        try:
+            if island is not None and getattr(island, "available", False):
+                choice = island.ask_permission(tool.spec.name, inputs)
+                if choice in ("y", "yes"):
+                    return "allow"
+                if choice in ("a", "always"):
+                    self._always_allow.add(tool.spec.name)
+                    return "allow"
+                return "deny"
+        except Exception:
+            # fall back to terminal prompt
+            pass
+
         log.warn(f"需要确认非只读工具: {tool.spec.name}")
         if tool.spec.name == "Shell":
             cmd = str(inputs.get("command", "") or "")

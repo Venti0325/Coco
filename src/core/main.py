@@ -27,6 +27,7 @@ from core.engine import Engine
 from core.session import SessionStore
 from core.llm import LLMClient
 from core.permissions import PermissionChecker
+from core.island import DynamicIsland
 from core.tools import (
     FileEditTool,
     FileReadTool,
@@ -239,7 +240,8 @@ def entry() -> None:
 
     log.info("")
 
-    perms = PermissionChecker(auto_approve=args.auto_approve)
+    island = DynamicIsland().start()
+    perms = PermissionChecker(auto_approve=args.auto_approve, island=island)
 
     # Skills：先注册内置技能，再加载磁盘技能，最后注入可用技能列表到 system prompt。
     register_bundled_skills()
@@ -337,6 +339,10 @@ def entry() -> None:
             perms.resume_fn = _perms_resume
             _start_spinner()
             try:
+                island.set_working(True)
+            except Exception:
+                pass
+            try:
                 result = engine.run(
                     text,
                     prior_messages=chat_messages or None,
@@ -351,11 +357,19 @@ def entry() -> None:
             except Exception as exc:
                 _stop_spinner()
                 log.error(f"请求失败: {LLMClient.error_message(exc)}")
+                try:
+                    island.notify("请求失败", LLMClient.error_message(exc), error=True)
+                except Exception:
+                    pass
                 return False
             finally:
                 _stop_spinner()
                 perms.pause_fn = None
                 perms.resume_fn = None
+                try:
+                    island.set_working(False)
+                except Exception:
+                    pass
 
         if args.print_mode:
             print(result.answer, end="" if result.answer.endswith("\n") else "\n")
@@ -597,6 +611,10 @@ def entry() -> None:
                 repl_state.post_run_callback = None
                 cb()
             log.info("")
+    try:
+        island.stop()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

@@ -240,7 +240,9 @@ def _cmd_skills(ctx: CommandContext, args: str) -> None:
     log.info("可用技能：")
     for s in skills:
         desc = s.description or "（无说明）"
-        log.dim(f"  /{s.name} — {desc}")
+        log.info(f"  [bold]/{s.name}[/bold]")
+        log.dim(f"    {desc}")
+    log.info("")
 
 
 def _execute_skill(skill: Skill, args: str, ctx: CommandContext) -> None:

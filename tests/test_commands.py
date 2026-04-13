@@ -145,3 +145,42 @@ def test_dispatch_skill_fork_sets_pending_fork(tmp_path: Path):
     sk, prompt = st.pending_fork
     assert sk.name == "forkit"
     assert "hello" in prompt
+
+
+def test_dispatch_skills_command_prints_pretty_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from core.skills import register_skill, Skill, clear_skills
+
+    clear_skills()
+    register_skill(
+        Skill(
+            name="s1",
+            description="desc1",
+            source="bundled",
+            _prompt_text="x",
+        )
+    )
+    register_skill(
+        Skill(
+            name="s2",
+            description="desc2",
+            source="bundled",
+            _prompt_text="y",
+        )
+    )
+    ws = tmp_path
+    settings = AppSettings(provider=Provider.ANTHROPIC, model="m")
+    store = SessionStore(ws, "m")
+    st = ReplState(chat_messages=[], session_store=store)
+    ctx = CommandContext(workspace=ws, settings=settings, state=st)
+
+    seen: list[str] = []
+    monkeypatch.setattr("core.commands.log.info", lambda s="": seen.append(str(s)))
+    monkeypatch.setattr("core.commands.log.dim", lambda s="": seen.append(str(s)))
+
+    assert dispatch_slash(ctx, "/skills") == "handled"
+    out = "\n".join(seen)
+    # only check for key tokens; rich markup should be present
+    assert "/s1" in out
+    assert "desc1" in out
+    assert "/s2" in out
+    assert "desc2" in out
