@@ -3,7 +3,7 @@
 # Coco
 基于终端的轻量化 AI 编程助手：双后端 LLM、工具循环、会话持久化与斜杠命令。
 
-当前版本仅支持 **Windows（PowerShell）**。
+支持 **Windows / Linux / macOS**。
 
 ---
 
@@ -19,6 +19,16 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."   # 或 OPENAI_API_KEY
 coco
 ```
 
+**Linux / macOS（bash/zsh）**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+export ANTHROPIC_API_KEY="sk-ant-..."   # 或 OPENAI_API_KEY
+coco
+```
+
 首次运行后输入 **`/doctor`** 确认环境正常：
 
 ```
@@ -29,7 +39,7 @@ coco
   ✓ 工作区可访问
   ✓ prompt_toolkit 已安装
   ✓ git 可用
-  ✓ PowerShell 可用  (pwsh / powershell)
+  ✓ Shell 可用  (pwsh/powershell 或 bash/sh)
 ```
 
 ---
@@ -38,6 +48,7 @@ coco
 
 **① 了解一个新项目（探索类）**
 ```
+> /cd ~/my-project          # Linux/macOS
 > /cd D:\my-project         # Windows
 > 这是个什么项目，阅读重要文件告诉我
 ```
@@ -72,6 +83,14 @@ pip install -e ".[dev]"
 copy .env.example .env   # 用编辑器打开 .env 填写密钥
 ```
 
+**Linux / macOS**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env     # 用编辑器打开 .env 填写密钥
+```
+
 ---
 
 ## 日常启动
@@ -88,6 +107,19 @@ cd D:\resumeProject\claude_code\Coco_plus
 
 # 启动（在你想作为工作区的目录下运行）
 cd D:\your-project
+coco
+```
+
+**Linux / macOS**
+```bash
+# 进入项目目录
+cd ~/claude_code/Coco_plus
+
+# 激活虚拟环境
+source .venv/bin/activate
+
+# 启动（在你想作为工作区的目录下运行）
+cd ~/your-project
 coco
 ```
 
@@ -162,13 +194,13 @@ coco --auto-approve     # 跳过 Write/Edit/Shell 的终端确认（慎用）
 ## 功能概览
 
 - **工具**：Read、Glob、Grep（只读）；Shell、Write、Edit（需确认或使用 `--auto-approve`）
-- **Shell**：使用 PowerShell（`pwsh`/`powershell`），带超时、输出截断、危险命令拦截与 `cwd` 限制
+- **Shell**：自动探测平台 shell：Windows 使用 PowerShell（`pwsh`/`powershell`），Linux/macOS 使用 bash/sh；带超时、输出截断、危险命令拦截与 `cwd` 限制
 - **Engine**：多轮工具循环（简单/复杂任务自动切换步数上限）；Anthropic 与 OpenAI 兼容
 - **流式输出**：回答逐字显示，工具调用实时展示
 - **系统提示（context）**：工作目录、日期、可选 git 摘要、可选 **`COCO.md`** / **`CLAUDE.md`**
 - **会话**：JSONL 保存在用户数据目录下按工作区隔离的子目录中
 - **Skills**：内置与磁盘 skills（用户级与项目级），通过 `/<skill>` 触发
-- **灵动岛（GUI，可选）**：Windows 下弹出悬浮小窗展示 working/done/notify，并支持**图形化权限确认**（tkinter 不可用则自动回退到终端确认）
+- **灵动岛（GUI，可选）**：Windows 下弹出悬浮小窗展示 working/done/notify，并支持**图形化权限确认**（tkinter 不可用或非 Windows 则自动回退到终端确认）
 - **ESC 中止**：请求飞行中按 ESC 可立即中止当前轮次
 
 ---

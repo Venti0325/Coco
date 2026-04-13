@@ -1,6 +1,6 @@
 # Release Notes — Coco **v0.1.2-alpha**
 
-终端 AI 编程助手（预发布版本）。当前版本仅支持 **Windows（PowerShell）**。行为以源码与测试为准。
+跨平台终端 AI 编程助手（预发布版本）。支持 **Windows / Linux / macOS**。行为以源码与测试为准。
 
 ---
 
@@ -11,7 +11,9 @@
 - **`/init [--force]`** — 扫描项目并让 agent 自动生成 `COCO.md`（执行 Glob → Read → Write 工具链）；生成后立即热刷新当前会话的系统提示，无需重启。`--force` 可覆盖已有文件。
 
 ### 跨平台支持
--（本版本说明以 Windows 为准）**Shell 工具**使用 PowerShell（`pwsh`/`powershell`），带超时、输出截断、危险命令拦截与 `cwd` 限制。
+- **Shell 工具**自动探测平台 shell：Windows 使用 `pwsh`/`powershell`，Linux/macOS 使用 `bash`/`sh`（`shutil.which` 运行时探测）。
+- 危险命令拦截分平台规则：Windows（`Remove-Item -Recurse` 等）与 Unix（`rm -rf`、`mkfs`、`dd of=/dev/` 等）分别处理。
+- **CI 矩阵**覆盖 Windows + Linux（以工作流配置为准）。
 
 ### 其他改进
 - `LLMClient` 添加 `get_model()` / `set_model()` 支持运行时热切换，`Engine` 透传。
@@ -28,7 +30,7 @@
 - **内置工具**：Read、Glob、Grep（只读）；Write、Edit（需确认或使用 `--auto-approve`）；**Shell**（自动探测平台；带超时与输出截断）。
 - **权限**：非只读工具支持两种确认方式：
   - 终端确认（`y` / `n` / `always`）
-  - **灵动岛（GUI）权限弹窗**（可用时优先；tkinter 不可用则自动回退到终端）
+  - **灵动岛（GUI）权限弹窗**（可用时优先；tkinter 不可用/非 Windows 则自动回退到终端）
 - **会话**：按工作区隔离的 JSONL + meta；`/history`、`/resume`；启动可用 `--resume`。
 - **上下文压缩**：手动 `/compact`；按消息条数在请求前**自动 compact**。
 - **Skills**：内置与磁盘加载；`/<skill>` 执行；支持 **`context: fork`** 的隔离执行，结果回注到主会话；支持 `allowed_tools` 与 `paths` 的运行时约束（enforcement）。
