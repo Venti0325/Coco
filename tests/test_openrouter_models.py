@@ -27,11 +27,22 @@ from core.openrouter_models import (
 
 @pytest.fixture(autouse=True)
 def _isolate_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """每个测试用独立磁盘缓存路径，并清空内存缓存。"""
-    fake_cache = tmp_path / "openrouter_models.json"
+    """每个测试用独立磁盘缓存路径，并清空内存缓存。
+
+    模拟真实的"每个 base_url 一个文件"策略：默认 base_url 走 tmp/openrouter_models.json，
+    自定义代理走 tmp/openrouter_models_<hash>.json。这样 base_url 隔离测试能真实复现。
+    """
+    import hashlib
+
+    def _fake_cache(base_url: str | None = None) -> Path:
+        if not base_url or base_url.rstrip("/") == "https://openrouter.ai/api/v1":
+            return tmp_path / "openrouter_models.json"
+        h = hashlib.sha256(base_url.encode("utf-8")).hexdigest()[:8]
+        return tmp_path / f"openrouter_models_{h}.json"
+
     monkeypatch.setattr(
         "core.openrouter_models.openrouter_models_cache_file",
-        lambda: fake_cache,
+        _fake_cache,
     )
     openrouter_models._reset_for_tests()
     yield
@@ -108,7 +119,7 @@ def test_lookup_returns_none_when_no_cache_and_fetch_fails(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """没有磁盘缓存且远程失败 → 返回 None，不抛。"""
-    monkeypatch.setattr("core.openrouter_models._fetch_remote", lambda: None)
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", lambda base_url=None: None)
     assert lookup_max_completion_tokens("anthropic/claude-sonnet-4-5") is None
 
 
@@ -119,7 +130,7 @@ def test_lookup_swallows_fetch_exception(monkeypatch: pytest.MonkeyPatch):
         raise RuntimeError("network explode")
     # 直接调用 raiser() 会抛，但 _fetch_remote 自身的 except 应兜住——
     # 我们通过 monkeypatch 替换 _fetch_remote 本身为 None 来验证 lookup 行为
-    monkeypatch.setattr("core.openrouter_models._fetch_remote", lambda: None)
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", lambda base_url=None: None)
     assert lookup_max_completion_tokens("x") is None
 
 
@@ -127,7 +138,7 @@ def test_lookup_hits_cache(monkeypatch: pytest.MonkeyPatch):
     """_fetch_remote 只应被调一次，后续命中内存缓存。"""
     call_count = {"n": 0}
 
-    def fake_fetch():
+    def fake_fetch(base_url=None):
         call_count["n"] += 1
         return {"anthropic/claude-sonnet-4-5": 32_000}
 
@@ -140,7 +151,7 @@ def test_lookup_hits_cache(monkeypatch: pytest.MonkeyPatch):
 def test_lookup_writes_disk_cache(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "core.openrouter_models._fetch_remote",
-        lambda: {"openai/gpt-5": 16_384},
+        lambda base_url=None: {"openai/gpt-5": 16_384},
     )
     assert lookup_max_completion_tokens("openai/gpt-5") == 16_384
     # 重置内存缓存后再查，应能从磁盘恢复
@@ -156,7 +167,7 @@ def test_lookup_writes_disk_cache(monkeypatch: pytest.MonkeyPatch):
 def test_lookup_unknown_model_returns_none(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "core.openrouter_models._fetch_remote",
-        lambda: {"foo/bar": 1000},
+        lambda base_url=None: {"foo/bar": 1000},
     )
     assert lookup_max_completion_tokens("no/such-model") is None
 
@@ -179,7 +190,7 @@ def test_lookup_expired_disk_cache_triggers_refresh(
 
     monkeypatch.setattr(
         "core.openrouter_models._fetch_remote",
-        lambda: {"foo/bar": 9999},
+        lambda base_url=None: {"foo/bar": 9999},
     )
     assert lookup_max_completion_tokens("foo/bar") == 9999
 
@@ -197,7 +208,7 @@ def test_lookup_expired_disk_cache_refresh_fails_uses_stale(
         ],
     }), encoding="utf-8")
 
-    monkeypatch.setattr("core.openrouter_models._fetch_remote", lambda: None)
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", lambda base_url=None: None)
     assert lookup_max_completion_tokens("foo/bar") == 1000
 
 
@@ -251,7 +262,7 @@ def test_infer_max_tokens_uses_dynamic_for_openrouter_when_cache_warm(
         ],
     }), encoding="utf-8")
 
-    def explode():
+    def explode(base_url=None):
         raise AssertionError(
             "_infer_max_tokens startup path must not call _fetch_remote"
         )
@@ -270,7 +281,7 @@ def test_infer_max_tokens_falls_back_to_static_when_dynamic_fails(
     from core.config import _infer_max_tokens
     from core.models import Provider
 
-    monkeypatch.setattr("core.openrouter_models._fetch_remote", lambda: None)
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", lambda base_url=None: None)
     assert _infer_max_tokens(
         "anthropic/claude-sonnet-4-5", provider=Provider.OPENROUTER,
     ) == 32_000
@@ -318,7 +329,7 @@ def test_lookup_disk_only_mode_no_fetch_when_cold(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """allow_remote_fetch=False 且无任何缓存 → 立即 None，绝不触发 _fetch_remote。"""
-    def explode():
+    def explode(base_url=None):
         raise AssertionError(
             "allow_remote_fetch=False must never call _fetch_remote"
         )
@@ -342,7 +353,7 @@ def test_lookup_disk_only_mode_uses_fresh_disk_cache(
         ],
     }), encoding="utf-8")
 
-    def explode():
+    def explode(base_url=None):
         raise AssertionError("disk hit should not trigger network")
     monkeypatch.setattr("core.openrouter_models._fetch_remote", explode)
 
@@ -364,7 +375,7 @@ def test_lookup_disk_only_mode_uses_stale_disk_cache(
         ],
     }), encoding="utf-8")
 
-    def explode():
+    def explode(base_url=None):
         raise AssertionError("stale disk + disk-only must not refresh")
     monkeypatch.setattr("core.openrouter_models._fetch_remote", explode)
 
@@ -385,7 +396,7 @@ def test_infer_max_tokens_explicit_remote_fetch_uses_dynamic(
 
     fetch_called = {"n": 0}
 
-    def fake_fetch():
+    def fake_fetch(base_url=None):
         fetch_called["n"] += 1
         return {"anthropic/claude-sonnet-4-5": 88_888}
 
@@ -407,7 +418,7 @@ def test_infer_max_tokens_default_does_not_fetch(
     from core.config import _infer_max_tokens
     from core.models import Provider
 
-    def explode():
+    def explode(base_url=None):
         raise AssertionError("default _infer_max_tokens must not fetch")
 
     monkeypatch.setattr("core.openrouter_models._fetch_remote", explode)
@@ -429,7 +440,7 @@ def test_warm_cache_async_spawns_thread_and_fetches(
 
     fetch_called = threading.Event()
 
-    def fake_fetch():
+    def fake_fetch(base_url=None):
         fetch_called.set()
         return {"anthropic/claude-sonnet-4-5": 32_000, "openai/gpt-5": 16_384}
 
@@ -454,7 +465,7 @@ def test_warm_cache_async_disabled_by_env(
     """COCO_DISABLE_OPENROUTER_WARMUP=1 时返回 None 且绝不发请求。"""
     from core.openrouter_models import warm_cache_async
 
-    def explode():
+    def explode(base_url=None):
         raise AssertionError("warmup must not run when disabled")
 
     monkeypatch.setattr("core.openrouter_models._fetch_remote", explode)
@@ -472,7 +483,7 @@ def test_llm_client_from_settings_openrouter_triggers_warmup(
 
     fetch_called = threading.Event()
 
-    def fake_fetch():
+    def fake_fetch(base_url=None):
         fetch_called.set()
         return {"x/y": 1234}
 
@@ -498,7 +509,7 @@ def test_llm_client_from_settings_openai_does_not_trigger_warmup(
     from core.llm import LLMClient
     from core.models import AppSettings, Provider
 
-    def explode():
+    def explode(base_url=None):
         raise AssertionError("OPENAI provider must not trigger OpenRouter warmup")
 
     monkeypatch.setattr("core.openrouter_models._fetch_remote", explode)
@@ -529,7 +540,7 @@ def test_load_settings_never_hits_network_for_openrouter(
     from core.config import load_settings
     from core.models import Provider
 
-    def explode():
+    def explode(base_url=None):
         raise AssertionError("load_settings must not trigger _fetch_remote")
     monkeypatch.setattr("core.openrouter_models._fetch_remote", explode)
     monkeypatch.setattr("dotenv.load_dotenv", lambda *_a, **_kw: None)
@@ -563,3 +574,163 @@ def test_load_settings_never_hits_network_for_openrouter(
     assert s.max_tokens == 32_000
     # 启动要快：无网络分支应在毫秒级完成（放宽到 200ms 防 CI 抖动）
     assert elapsed < 0.2, f"load_settings too slow: {elapsed*1000:.1f}ms"
+
+
+# ── base_url 贯通到模型元数据请求 ───────────────────────────────────
+
+
+def test_fetch_remote_respects_custom_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """_fetch_remote 的 URL 必须基于传入的 base_url 拼接，不能写死官方地址。"""
+    from core import openrouter_models as om
+
+    captured = {}
+
+    class _FakeRequest:
+        def __init__(self, url, headers=None):
+            captured["url"] = url
+            captured["headers"] = headers
+
+    class _FakeResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            pass
+        def read(self):
+            return b'{"data": []}'
+
+    def fake_urlopen(req, timeout=None):
+        captured["timeout"] = timeout
+        return _FakeResp()
+
+    monkeypatch.setattr("urllib.request.Request", _FakeRequest)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    om._fetch_remote(base_url="https://my-proxy.example.com/v1")
+    assert captured["url"] == "https://my-proxy.example.com/v1/models"
+
+    captured.clear()
+    om._fetch_remote(base_url=None)
+    assert captured["url"] == "https://openrouter.ai/api/v1/models"
+
+    captured.clear()
+    # 尾部斜杠被规范化
+    om._fetch_remote(base_url="https://proxy.local/v1/")
+    assert captured["url"] == "https://proxy.local/v1/models"
+
+
+def test_lookup_different_base_urls_isolate_cache(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """两个不同 base_url 各自维护独立缓存，互不污染。"""
+    responses_by_base: dict[str, dict[str, int]] = {
+        "https://openrouter.ai/api/v1": {"anthropic/claude": 32_000},
+        "https://my-proxy.example.com/v1": {"anthropic/claude": 11_111},
+    }
+    fetches: list[str] = []
+
+    def fake_fetch(base_url=None):
+        key = (base_url or "https://openrouter.ai/api/v1").rstrip("/")
+        fetches.append(key)
+        return responses_by_base.get(key)
+
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", fake_fetch)
+
+    # 官方 base_url → 32_000
+    assert lookup_max_completion_tokens(
+        "anthropic/claude", base_url=None,
+    ) == 32_000
+
+    # 代理 base_url → 11_111（即使上一次查过相同 model_id）
+    assert lookup_max_completion_tokens(
+        "anthropic/claude", base_url="https://my-proxy.example.com/v1",
+    ) == 11_111
+
+    # 切回官方 → 仍返回 32_000（来自各自的内存槽）
+    assert lookup_max_completion_tokens(
+        "anthropic/claude", base_url=None,
+    ) == 32_000
+
+    # 各 base_url 只 fetch 一次；证明两份缓存各自 hit
+    assert sorted(fetches) == [
+        "https://my-proxy.example.com/v1",
+        "https://openrouter.ai/api/v1",
+    ]
+
+
+def test_warm_cache_async_uses_provided_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """warm_cache_async(base_url=X) 必须把 X 传到 _fetch_remote。"""
+    from core.openrouter_models import warm_cache_async
+
+    captured_base_url = threading.Event()
+    seen: dict[str, str | None] = {}
+
+    def fake_fetch(base_url=None):
+        seen["url"] = base_url
+        captured_base_url.set()
+        return {"x/y": 1}
+
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", fake_fetch)
+    monkeypatch.delenv("COCO_DISABLE_OPENROUTER_WARMUP", raising=False)
+
+    thread = warm_cache_async(base_url="https://my-proxy.example.com/v1")
+    assert thread is not None
+    thread.join(timeout=2)
+    assert captured_base_url.is_set()
+    assert seen["url"] == "https://my-proxy.example.com/v1"
+
+
+def test_llm_client_from_settings_warmup_uses_settings_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """from_settings(OPENROUTER, base_url=proxy) 触发的 warmup 应当走代理地址。"""
+    from core.llm import LLMClient
+    from core.models import AppSettings, Provider
+
+    seen_base_url = threading.Event()
+    seen: dict[str, str | None] = {}
+
+    def fake_fetch(base_url=None):
+        seen["url"] = base_url
+        seen_base_url.set()
+        return {"x/y": 1}
+
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", fake_fetch)
+    monkeypatch.delenv("COCO_DISABLE_OPENROUTER_WARMUP", raising=False)
+
+    settings = AppSettings(
+        provider=Provider.OPENROUTER,
+        model="anthropic/claude-sonnet-4-5",
+        api_key="sk-or-test",
+        base_url="https://my-proxy.example.com/v1",
+    )
+    LLMClient.from_settings(settings)
+
+    assert seen_base_url.wait(timeout=2)
+    assert seen["url"] == "https://my-proxy.example.com/v1"
+
+
+def test_cache_file_per_base_url(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """不同 base_url 应落到不同磁盘文件；默认 base_url 走未后缀的那个文件。"""
+    # 绕过 autouse fixture 的 monkeypatch，直接测原始 paths.openrouter_models_cache_file
+    from core.paths import openrouter_models_cache_file
+
+    default = openrouter_models_cache_file()
+    assert default.name == "openrouter_models.json"
+
+    official = openrouter_models_cache_file("https://openrouter.ai/api/v1")
+    assert official == default  # 官方地址等同于 None
+
+    custom = openrouter_models_cache_file("https://my-proxy.example.com/v1")
+    assert custom != default
+    assert custom.name.startswith("openrouter_models_") and custom.name.endswith(".json")
+
+    # 相同 base_url 产生相同文件名（hash 稳定）
+    assert custom == openrouter_models_cache_file("https://my-proxy.example.com/v1")
+
+    # 不同 base_url 产生不同文件名
+    other = openrouter_models_cache_file("https://another-proxy.example.com/v1")
+    assert other != custom

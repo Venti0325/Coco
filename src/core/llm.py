@@ -338,10 +338,12 @@ class LLMClient:
                 pass_fallback_models=True,
             )
             # 后台预热 OpenRouter 模型表，本次启动用不上但写好磁盘缓存供后续使用。
+            # base_url 跟随配置（可能是官方，也可能是用户代理）——保证模型元数据请求
+            # 和主聊天请求走同一个 gateway。
             # fire-and-forget；测试用 COCO_DISABLE_OPENROUTER_WARMUP=1 关闭。
             try:
                 from .openrouter_models import warm_cache_async
-                warm_cache_async()
+                warm_cache_async(base_url=settings.base_url)
             except Exception:
                 pass
         elif settings.provider == Provider.OPENAI:

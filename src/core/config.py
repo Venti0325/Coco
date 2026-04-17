@@ -172,6 +172,7 @@ def _infer_max_tokens(
     *,
     provider: Provider | None = None,
     allow_remote_fetch: bool = False,
+    base_url: str | None = None,
 ) -> int:
     """根据模型名前缀查表，未匹配时返回通用兜底值。
 
@@ -180,7 +181,10 @@ def _infer_max_tokens(
     - ``allow_remote_fetch=False``（**默认，启动安全**）：仅读已有内存/磁盘缓存，
       绝不发 HTTP。``load_settings`` 路径必须用此默认值，避免 REPL 启动被网络阻塞。
     - ``allow_remote_fetch=True``（**显式运行时调用**）：缓存缺失或过期时同步 fetch
-      `/v1/models`。`/model` 命令切换模型时使用——用户已经明确等待。
+      ``/v1/models``。``/model`` 命令切换模型时使用——用户已经明确等待。
+
+    ``base_url`` 对应 OpenRouter gateway（默认官方，用户可配私有代理）——传入后
+    模型元数据请求也走这个 gateway，保证和主聊天请求一致。
 
     所有失败（网络挂、超时、解析错误）都回落到静态 ``_MAX_TOKENS_TABLE``。其他 provider
     或无 provider 信息时直接走静态表。
@@ -189,7 +193,9 @@ def _infer_max_tokens(
         try:
             from .openrouter_models import lookup_max_completion_tokens
             dynamic = lookup_max_completion_tokens(
-                model, allow_remote_fetch=allow_remote_fetch,
+                model,
+                allow_remote_fetch=allow_remote_fetch,
+                base_url=base_url,
             )
             if dynamic and dynamic > 0:
                 return dynamic
@@ -261,18 +267,22 @@ def load_settings(
     # 2) model（直接使用用户填写的值，不做别名转换）
     model = _pick("model")
 
-    # 3) max_tokens（各层显式值 > 按模型推断）
-    raw_max = _pick("max_tokens")
-    max_tokens = _safe_int(raw_max, _infer_max_tokens(model, provider=provider))
-
-    # 4) effort
-    effort = _validate_effort(_pick("effort"))
-
-    # 5) api_key / base_url
-    #    CLI 的 --api-key 最高优先；否则取对应 provider 的专属值
-    pkey = provider.value  # "anthropic" 或 "openai"
+    # 3) api_key / base_url —— 必须在 max_tokens 之前算出来，
+    #    这样 OpenRouter 动态查询（磁盘缓存命中时）能按正确的 base_url 分槽。
+    #    CLI 的 --api-key / --base-url 最高优先；否则取对应 provider 的专属值。
+    pkey = provider.value  # "anthropic" / "openai" / "openrouter"
     api_key = _pick("api_key") or _pick(f"{pkey}_api_key")
     base_url = _pick("base_url") or _pick(f"{pkey}_base_url")
+
+    # 4) max_tokens（各层显式值 > 按模型推断；OpenRouter 路径尊重 base_url）
+    raw_max = _pick("max_tokens")
+    max_tokens = _safe_int(
+        raw_max,
+        _infer_max_tokens(model, provider=provider, base_url=base_url),
+    )
+
+    # 5) effort
+    effort = _validate_effort(_pick("effort"))
 
     max_steps = _safe_int(_pick("max_steps"), 10)
     max_steps_complex = _safe_int(_pick("max_steps_complex"), 20)

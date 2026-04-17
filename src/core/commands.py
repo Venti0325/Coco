@@ -353,7 +353,10 @@ def _cmd_model(ctx: CommandContext, args: str) -> None:
     if args.strip():
         model = args.strip()
         max_t = _infer_max_tokens(
-        model, provider=ctx.settings.provider, allow_remote_fetch=True,
+        model,
+        provider=ctx.settings.provider,
+        allow_remote_fetch=True,
+        base_url=ctx.settings.base_url,
     )
         client.set_model(model, max_t)
         log.info(f"已切换模型为 [bold]{model}[/bold]  (max_tokens={max_t:,})")
@@ -449,7 +452,10 @@ def _cmd_model(ctx: CommandContext, args: str) -> None:
 
     model = result[0]
     max_t = _infer_max_tokens(
-        model, provider=ctx.settings.provider, allow_remote_fetch=True,
+        model,
+        provider=ctx.settings.provider,
+        allow_remote_fetch=True,
+        base_url=ctx.settings.base_url,
     )
     client.set_model(model, max_t)
     log.info(f"已切换模型为 [bold]{model}[/bold]  (max_tokens={max_t:,})")
