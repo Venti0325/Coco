@@ -337,6 +337,15 @@ class LLMClient:
                 },
                 pass_fallback_models=True,
             )
+            # 后台预热 OpenRouter 模型表，本次启动用不上但写好磁盘缓存供后续使用。
+            # base_url 跟随配置（可能是官方，也可能是用户代理）——保证模型元数据请求
+            # 和主聊天请求走同一个 gateway。
+            # fire-and-forget；测试用 COCO_DISABLE_OPENROUTER_WARMUP=1 关闭。
+            try:
+                from .openrouter_models import warm_cache_async
+                warm_cache_async(base_url=settings.base_url)
+            except Exception:
+                pass
         elif settings.provider == Provider.OPENAI:
             backend = _OpenAIBackend(settings)
         else:
@@ -489,12 +498,15 @@ def _build_openai_chat_request(
         params["tools"] = [_tool_schema_to_openai(t) for t in tools]
     if effort and _openai_supports_reasoning_effort(model):
         params["reasoning_effort"] = effort
-    # OpenRouter 专有字段：必须走 SDK 的 extra_body 入口
+    # OpenRouter 专有字段：必须走 SDK 的 extra_body 入口。
+    # extra_body["models"] 只放 fallback 列表——顶层 params["model"] 已是 primary；
+    # 若把 primary 再塞进 models 数组，OpenRouter 会按顺序先重试一遍主模型
+    # 再进入真正的 fallback，failover 顺序就错了。
     extra_body: dict[str, Any] = {}
     if extra_body_provider:
         extra_body["provider"] = extra_body_provider
     if fallback_models:
-        extra_body["models"] = [model, *fallback_models]
+        extra_body["models"] = list(fallback_models)
     if extra_body:
         params["extra_body"] = extra_body
     return params

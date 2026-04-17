@@ -54,9 +54,22 @@ def history_file() -> Path:
     return state_home() / "history"
 
 
-def openrouter_models_cache_file() -> Path:
-    """OpenRouter /v1/models 端点的本地缓存文件。"""
-    return data_home() / "openrouter_models.json"
+_OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+def openrouter_models_cache_file(base_url: str | None = None) -> Path:
+    """OpenRouter /v1/models 端点的本地缓存文件。
+
+    base_url 为 None 或官方地址 ``https://openrouter.ai/api/v1`` 时走
+    ``openrouter_models.json``；自定义代理时文件名带 base_url 的短哈希后缀，
+    避免不同 gateway 的模型数据互相污染（私有代理返回的 models 列表可能
+    和官方不一致）。
+    """
+    base = data_home() / "openrouter_models.json"
+    if not base_url or base_url.rstrip("/") == _OPENROUTER_DEFAULT_BASE_URL:
+        return base
+    digest = hashlib.sha256(base_url.encode("utf-8")).hexdigest()[:8]
+    return base.with_name(f"{base.stem}_{digest}{base.suffix}")
 
 
 def _sanitize_workspace_path(resolved: str) -> str:
