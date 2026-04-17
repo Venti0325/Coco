@@ -36,6 +36,7 @@ from core.tools import (
     GrepTool,
     ShellTool,
 )
+from core.tools.base import Tool
 from core import log
 from core._keylistener import EscListener
 
@@ -67,6 +68,7 @@ class _SlashCommandCompleter(Completer):
         ("resume",    "恢复会话"),
         ("compact",   "压缩对话上下文"),
         ("skills",    "列出可用技能"),
+        ("mcp",       "MCP server 状态与工具列表"),
         ("workspace", "切换工作区"),
         ("cd",        "切换工作区（同 workspace）"),
         ("exit",      "退出 REPL"),
@@ -247,6 +249,31 @@ def entry() -> None:
     register_bundled_skills()
     discover_skills(workspace)
 
+    # MCP：可选依赖 —— import 失败 / 无配置 / 启动失败都应优雅降级，
+    # Coco 本体在任何 MCP 问题下都必须能继续正常跑。
+    mcp_manager = None
+    mcp_tools: list[Tool] = []
+    try:
+        from core.mcp.config import load_mcp_configs
+        mcp_configs = load_mcp_configs(workspace)
+    except Exception:
+        mcp_configs = []
+
+    if mcp_configs:
+        try:
+            from core.mcp.manager import MCPManager
+            log.dim(f"  加载 {len(mcp_configs)} 个 MCP server…")
+            mcp_manager = MCPManager(mcp_configs)
+            mcp_tools = mcp_manager.discover_tools()
+            if mcp_tools:
+                log.success(f"  MCP 就绪：共注册 {len(mcp_tools)} 个远端工具")
+            else:
+                log.warn("  MCP 配置存在但未成功发现工具；使用 /mcp 查看状态")
+        except ImportError:
+            log.warn("  MCP 配置存在，但 mcp 依赖未安装；请运行 pip install 'coco[mcp]'")
+        except Exception as e:
+            log.warn(f"  MCP 加载失败（已跳过）：{e}")
+
     system_prompt = build_system_prompt(workspace)
     skills_section = build_skills_prompt_section()
     if skills_section:
@@ -262,16 +289,19 @@ def entry() -> None:
         allowed_paths: list[str] | None = None,
     ) -> Engine:
         ws = (workspace or Path.cwd()).resolve()
+        builtin_tools: list[Tool] = [
+            FileReadTool(),
+            GlobTool(),
+            GrepTool(),
+            ShellTool(ws),
+            FileWriteTool(),
+            FileEditTool(),
+        ]
+        # MCP 工具追加在内置工具之后，命名空间前缀保证不冲突
+        all_tools = builtin_tools + list(mcp_tools)
         return Engine(
             client,
-            [
-                FileReadTool(),
-                GlobTool(),
-                GrepTool(),
-                ShellTool(ws),
-                FileWriteTool(),
-                FileEditTool(),
-            ],
+            all_tools,
             max_steps=settings.max_steps,
             max_steps_complex=settings.max_steps_complex,
             system=system,
@@ -516,6 +546,7 @@ def entry() -> None:
             compact_service=compact_service,
             system_prompt=system_prompt,
             llm_client=client,
+            mcp_manager=mcp_manager,
         )
 
         pt_session = _build_prompt_session()
