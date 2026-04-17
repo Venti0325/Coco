@@ -34,6 +34,6 @@
 
 ## 2026-04-08
 
-- **(in progress)** OpenRouter 接入 Step 1+2：`_OpenAIBackend` 接受 `default_headers`/`extra_body_provider`/`pass_fallback_models` 注入；`from_settings` OPENROUTER 分支默认走 `require_parameters:true` + `sort:throughput` + attribution headers；命名空间 slug 的 `reasoning_effort` 前缀检查修复；CLI choices 与 `/doctor` 提示更新。Step 3+4（动态模型表 + fallback_models）待做 → [sessions/2026-04-08.md](sessions/2026-04-08.md)
+- **(done)** OpenRouter 接入完整落地（Step 1-4）：`Provider.OPENROUTER` 枚举；`_OpenAIBackend` 接受 `default_headers`/`extra_body_provider`/`pass_fallback_models` 注入；专有字段走 `params["extra_body"]`；`from_settings` OPENROUTER 分支默认 `require_parameters:true` + `sort:throughput` + attribution headers；命名空间 slug 的 `reasoning_effort` 检查修复；`openrouter_models.py` 懒加载 + 24h 缓存 + 3s 超时 + fail-open，读 `top_provider.max_completion_tokens`（非 `context_length`）；`AppSettings.fallback_models` 字段 + TOML 列表 + `COCO_FALLBACK_MODELS` env（逗号分隔），严格 gate 在 OpenRouter 路径不泄漏；`/model` 命令 OpenRouter 切换时拿动态 `max_tokens`；`.env.example` 补齐。144 tests passed → [sessions/2026-04-08.md](sessions/2026-04-08.md)
 - **(done)** 建立 `docs/` 文档流程：`changelog.md` + 每日 `sessions/<日期>.md`（plan / summary 两段式）；`CLAUDE.md` 增加 workflow 一节
 - **(done)** 初始化 `CLAUDE.md`，覆盖架构关键缝、命令、测试模式与 Windows-first 注意事项

@@ -54,6 +54,11 @@ def history_file() -> Path:
     return state_home() / "history"
 
 
+def openrouter_models_cache_file() -> Path:
+    """OpenRouter /v1/models 端点的本地缓存文件。"""
+    return data_home() / "openrouter_models.json"
+
+
 def _sanitize_workspace_path(resolved: str) -> str:
     """将绝对工作区路径变为安全的目录名（避免同名不同路径冲突）。"""
     name = re.sub(r"[^a-zA-Z0-9]", "-", resolved)

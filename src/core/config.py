@@ -76,6 +76,7 @@ _ENV_MAP: dict[str, str] = {
     "COCO_EFFORT":            "effort",
     "COCO_MAX_STEPS":         "max_steps",
     "COCO_MAX_STEPS_COMPLEX": "max_steps_complex",
+    "COCO_FALLBACK_MODELS":   "fallback_models",   # 逗号分隔；仅 OpenRouter 生效
     "ANTHROPIC_API_KEY":      "anthropic_api_key",
     "ANTHROPIC_BASE_URL":     "anthropic_base_url",
     "OPENAI_API_KEY":         "openai_api_key",
@@ -125,6 +126,9 @@ def _read_toml(path: Path) -> dict:
     for key in ("provider", "model", "max_tokens", "effort", "max_steps", "max_steps_complex"):
         if key in data:
             flat[key] = data[key]
+    # 顶层列表字段
+    if "fallback_models" in data:
+        flat["fallback_models"] = data["fallback_models"]
     # provider 子表 → 展平为 "<provider>_<key>"
     for section in ("anthropic", "openai", "openrouter"):
         sub = data.get(section)
@@ -163,8 +167,22 @@ def _from_cli(args: Namespace) -> dict:
 _FALLBACK_MAX_TOKENS = 8_192   # 保守兜底；未知模型通常支持 8192，需要更多时用 COCO_MAX_TOKENS 覆盖
 
 
-def _infer_max_tokens(model: str) -> int:
-    """根据模型名前缀查表，未匹配时返回通用兜底值。"""
+def _infer_max_tokens(model: str, *, provider: Provider | None = None) -> int:
+    """根据模型名前缀查表，未匹配时返回通用兜底值。
+
+    OpenRouter 路径：先尝试动态查询 /v1/models 的真实
+    ``top_provider.max_completion_tokens``；失败或未命中时回落到静态前缀表。
+    其他 provider 或无 provider 信息时直接走静态表。
+    """
+    if provider == Provider.OPENROUTER and "/" in model:
+        try:
+            from .openrouter_models import lookup_max_completion_tokens
+            dynamic = lookup_max_completion_tokens(model)
+            if dynamic and dynamic > 0:
+                return dynamic
+        except Exception:
+            # fail-open：动态查询挂了一律退回静态表
+            pass
     for prefix, limit in _MAX_TOKENS_TABLE:
         if model.startswith(prefix):
             return limit
@@ -232,7 +250,7 @@ def load_settings(
 
     # 3) max_tokens（各层显式值 > 按模型推断）
     raw_max = _pick("max_tokens")
-    max_tokens = _safe_int(raw_max, _infer_max_tokens(model))
+    max_tokens = _safe_int(raw_max, _infer_max_tokens(model, provider=provider))
 
     # 4) effort
     effort = _validate_effort(_pick("effort"))
@@ -246,6 +264,10 @@ def load_settings(
     max_steps = _safe_int(_pick("max_steps"), 10)
     max_steps_complex = _safe_int(_pick("max_steps_complex"), 20)
 
+    # 6) fallback_models —— TOML 列表或环境变量逗号分隔；仅在 OpenRouter 路径生效
+    raw_fallback = _pick("fallback_models")
+    fallback_models = _parse_fallback_models(raw_fallback)
+
     return AppSettings(
         provider=provider,
         model=model,
@@ -255,4 +277,25 @@ def load_settings(
         effort=effort,
         max_steps=max_steps,
         max_steps_complex=max_steps_complex,
+        fallback_models=fallback_models,
     )
+
+
+def _parse_fallback_models(raw) -> tuple[str, ...]:
+    """把 TOML 列表或环境变量逗号分隔串解析为 tuple[str, ...]。
+
+    容错：None / 空串 / 非预期类型都返回 ()。
+    """
+    if raw is None:
+        return ()
+    if isinstance(raw, (list, tuple)):
+        return tuple(
+            s.strip() for s in raw
+            if isinstance(s, str) and s.strip()
+        )
+    if isinstance(raw, str):
+        return tuple(
+            s.strip() for s in raw.split(",")
+            if s.strip()
+        )
+    return ()

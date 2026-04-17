@@ -193,3 +193,117 @@ def test_argparse_accepts_openrouter():
     from core.main import _build_parser
     args = _build_parser().parse_args(["--provider", "openrouter"])
     assert args.provider == "openrouter"
+
+
+# ── Step 4：fallback_models 配置层 ────────────────────────────────────
+
+
+def test_fallback_models_from_toml_list(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    empty_args: Namespace,
+):
+    """项目 TOML 顶层 fallback_models = [...] 正确读入 AppSettings。"""
+    _clear_config_env(monkeypatch)
+    monkeypatch.setattr(
+        "core.config.user_config_file",
+        lambda: tmp_path / "missing.toml",
+    )
+    (tmp_path / ".coco.toml").write_text(
+        'provider = "openrouter"\n'
+        'model = "anthropic/claude-sonnet-4-5"\n'
+        'fallback_models = ["openai/gpt-5", "google/gemini-2.5-pro"]\n'
+        '[openrouter]\n'
+        'api_key = "sk-or-test"\n',
+        encoding="utf-8",
+    )
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.fallback_models == ("openai/gpt-5", "google/gemini-2.5-pro")
+
+
+def test_fallback_models_from_env_comma_separated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    empty_args: Namespace,
+):
+    """环境变量逗号分隔形式能正确解析，空白被 trim 掉。"""
+    _clear_config_env(monkeypatch)
+    monkeypatch.setattr(
+        "core.config.user_config_file",
+        lambda: tmp_path / "missing.toml",
+    )
+    monkeypatch.setenv("COCO_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    monkeypatch.setenv("COCO_MODEL", "anthropic/claude-opus-4")
+    monkeypatch.setenv("COCO_FALLBACK_MODELS", "openai/gpt-5 , deepseek/deepseek-v3")
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.fallback_models == ("openai/gpt-5", "deepseek/deepseek-v3")
+
+
+def test_fallback_models_empty_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    empty_args: Namespace,
+):
+    """未设置时为空 tuple，不是 None。"""
+    _clear_config_env(monkeypatch)
+    monkeypatch.setattr(
+        "core.config.user_config_file",
+        lambda: tmp_path / "missing.toml",
+    )
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.fallback_models == ()
+    assert isinstance(s.fallback_models, tuple)
+
+
+def test_fallback_models_env_overrides_toml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    empty_args: Namespace,
+):
+    """env > toml 优先级对 fallback_models 同样成立。"""
+    _clear_config_env(monkeypatch)
+    monkeypatch.setattr(
+        "core.config.user_config_file",
+        lambda: tmp_path / "missing.toml",
+    )
+    (tmp_path / ".coco.toml").write_text(
+        'fallback_models = ["from/toml"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("COCO_FALLBACK_MODELS", "from/env")
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.fallback_models == ("from/env",)
+
+
+# ── Step 4：fallback_models 只在 OpenRouter 路径生效 ─────────────────
+
+
+def test_fallback_models_set_on_openai_does_not_leak():
+    """provider=openai 的 backend 不会把 fallback_models 注入请求。"""
+    from core.llm import LLMClient
+    from core.models import AppSettings, Provider
+
+    settings = AppSettings(
+        provider=Provider.OPENAI,
+        model="gpt-5",
+        api_key="sk-test",
+        fallback_models=("backup/model",),   # 配了但应被忽略
+    )
+    client = LLMClient.from_settings(settings)
+    assert client._backend._pass_fallback_models is False
+
+
+def test_fallback_models_set_on_openrouter_enables_passthrough():
+    """provider=openrouter 的 backend 打开 fallback 通道。"""
+    from core.llm import LLMClient
+    from core.models import AppSettings, Provider
+
+    settings = AppSettings(
+        provider=Provider.OPENROUTER,
+        model="anthropic/claude-sonnet-4-5",
+        api_key="sk-or-test",
+        fallback_models=("openai/gpt-5",),
+    )
+    client = LLMClient.from_settings(settings)
+    assert client._backend._pass_fallback_models is True

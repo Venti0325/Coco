@@ -204,3 +204,53 @@ def test_from_settings_openrouter_custom_base_url_preserved():
     )
     client = LLMClient.from_settings(settings)
     assert client._settings.base_url == "https://my-proxy.example.com/v1"
+
+
+# ── Step 4：fallback_models 端到端注入 ───────────────────────────────
+
+
+def test_openrouter_backend_streams_with_fallback_models():
+    """OpenRouter backend 实际 stream 时应把 settings.fallback_models 注入 extra_body["models"]。"""
+    settings = AppSettings(
+        provider=Provider.OPENROUTER,
+        model="anthropic/claude-sonnet-4-5",
+        api_key="sk-or-test",
+        fallback_models=("openai/gpt-5", "google/gemini-2.5-pro"),
+    )
+    client = LLMClient.from_settings(settings)
+    backend = client._backend
+    # stream() 最终把 params 交给 _OpenAIStream；我们截获 params 即可
+    stream = backend.stream(
+        model="anthropic/claude-sonnet-4-5",
+        max_tokens=32_000,
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+    )
+    params = stream._params  # _OpenAIStream 持有 params
+    assert "extra_body" in params
+    assert params["extra_body"]["models"] == [
+        "anthropic/claude-sonnet-4-5",
+        "openai/gpt-5",
+        "google/gemini-2.5-pro",
+    ]
+    # provider 配置也应当在场
+    assert params["extra_body"]["provider"]["require_parameters"] is True
+
+
+def test_openai_backend_stream_no_models_field_even_if_settings_has_fallback():
+    """provider=openai 的 backend 即使 settings 带 fallback_models，请求里也不应出现 models。"""
+    settings = AppSettings(
+        provider=Provider.OPENAI,
+        model="gpt-5",
+        api_key="sk-test",
+        fallback_models=("backup/model",),   # 配了也不该用
+    )
+    client = LLMClient.from_settings(settings)
+    stream = client._backend.stream(
+        model="gpt-5",
+        max_tokens=16_384,
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+    )
+    params = stream._params
+    assert "extra_body" not in params or "models" not in params.get("extra_body", {})
