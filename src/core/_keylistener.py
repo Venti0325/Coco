@@ -57,10 +57,17 @@ class EscListener:
                 target=self._listen_windows, daemon=True
             )
         else:
-            self._old_settings = termios.tcgetattr(self._fd)
-            tty.setcbreak(self._fd)
+            # stdin 不是 TTY（benchmark 子进程、CI、管道输入等）时 termios 无法生效；
+            # 此路径下 ESC 监听本就无意义，直接以 no-op 模式进入。
+            try:
+                self._old_settings = termios.tcgetattr(self._fd)
+                tty.setcbreak(self._fd)
+            except (termios.error, OSError):
+                self._old_settings = None
+                return self
             self._thread = threading.Thread(target=self._listen_unix, daemon=True)
-        self._thread.start()
+        if self._thread is not None:
+            self._thread.start()
         return self
 
     def __exit__(self, *_exc) -> None:
