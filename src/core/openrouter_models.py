@@ -1,12 +1,16 @@
 """OpenRouter /v1/models 端点查询与本地缓存。
 
 策略：
-- 懒加载：首次需要时才发 HTTP 请求；启动期间不阻塞 REPL
+- 两档触发：`allow_remote_fetch=False` 时仅走内存/磁盘缓存——供启动路径使用，**绝不发网络**；
+  `allow_remote_fetch=True`（默认）时在无缓存或过期时才发 HTTP
 - fail-open：网络/超时/解析失败一律返回 None，调用方回退到静态 _MAX_TOKENS_TABLE
-- 24h TTL：过期后下次查询触发刷新；刷新失败仍用旧值
+- 24h TTL：过期后下次允许远程的查询触发刷新；刷新失败仍用旧值
 - 字段语义：读 top_provider.max_completion_tokens（单次输出上限），不是 context_length（总窗口）
 
 线程安全：一个模块级锁保护内存缓存；磁盘读写不加锁（覆盖写幂等）。
+
+启动不变量：`core.config._infer_max_tokens` 必须用 `allow_remote_fetch=False` 调用本模块。
+REPL 启动过程严格不发网络请求——首次 LLM 请求（或显式的刷新命令）再负责预热缓存。
 """
 
 from __future__ import annotations
@@ -108,11 +112,19 @@ def _save_disk(models: dict[str, int]) -> None:
         pass
 
 
-def lookup_max_completion_tokens(model_id: str) -> int | None:
+def lookup_max_completion_tokens(
+    model_id: str,
+    *,
+    allow_remote_fetch: bool = True,
+) -> int | None:
     """查询某 OpenRouter 模型的输出上限；任何失败都返回 None（fail-open）。
 
-    优先级：内存缓存（未过期）→ 磁盘缓存（未过期）→ 远程拉取 → None
-    磁盘缓存过期时仍先用着旧值，同时同步刷新。
+    优先级：内存缓存（未过期）→ 磁盘缓存（未过期）→ 远程拉取（仅当 allow_remote_fetch=True）→ None
+    磁盘缓存过期时先用着旧值，同时同步刷新（也要 allow_remote_fetch=True 才会刷）。
+
+    `allow_remote_fetch=False` 是启动路径的专用模式：仅读缓存，**绝不发 HTTP**。这保证
+    `load_settings()` 在冷启动或缓存过期时不会被网络 I/O 阻塞。首次真正的 LLM 请求或
+    显式的刷新命令才应该用默认 `True`。
     """
     global _mem_cache, _mem_cache_at
 
@@ -132,7 +144,9 @@ def lookup_max_completion_tokens(model_id: str) -> int | None:
             _mem_cache_at = fetched_at
             if age <= _CACHE_TTL_SEC:
                 return cache.get(model_id)
-            # 过期：先返回旧值的尝试，同时异步不容易（这里就同步刷新）
+            # 过期：如果允许拉取，尝试刷新；否则返回旧值不发 HTTP
+            if not allow_remote_fetch:
+                return cache.get(model_id)
             fresh = _fetch_remote()
             if fresh:
                 _mem_cache = fresh
@@ -142,7 +156,9 @@ def lookup_max_completion_tokens(model_id: str) -> int | None:
             # 远程挂了，继续用旧磁盘值
             return cache.get(model_id)
 
-        # 3) 没有任何缓存，发一次远程请求
+        # 3) 没有任何缓存
+        if not allow_remote_fetch:
+            return None
         fresh = _fetch_remote()
         if fresh:
             _mem_cache = fresh

@@ -123,7 +123,12 @@ def test_build_openai_chat_request_extra_body_provider():
 
 
 def test_build_openai_chat_request_fallback_models():
-    """fallback_models 非空时应生成 extra_body["models"] 数组。"""
+    """fallback_models 非空时生成 extra_body["models"]——**只含 fallback**，不含 primary。
+
+    OpenRouter OpenAI-SDK 契约：顶层 params["model"] 是 primary；extra_body.models 是
+    additional fallback 列表。如果把 primary 再塞进 models 数组，OpenRouter 会按序再重试
+    一次主模型，failover 顺序就错了。
+    """
     params = _build_openai_chat_request(
         model="anthropic/claude-sonnet-4-5",
         max_tokens=8192,
@@ -134,11 +139,14 @@ def test_build_openai_chat_request_fallback_models():
         stream=True,
         fallback_models=("openai/gpt-5", "google/gemini-2.5-pro"),
     )
+    # 正向：primary 仍在顶层 model，不被 fallback 覆盖或搬进 models
+    assert params["model"] == "anthropic/claude-sonnet-4-5"
+    # 负向：extra_body["models"] 只含 fallback，不含 primary
     assert params["extra_body"]["models"] == [
-        "anthropic/claude-sonnet-4-5",
         "openai/gpt-5",
         "google/gemini-2.5-pro",
     ]
+    assert "anthropic/claude-sonnet-4-5" not in params["extra_body"]["models"]
 
 
 def test_build_openai_chat_request_no_extra_body_when_empty():
@@ -228,8 +236,10 @@ def test_openrouter_backend_streams_with_fallback_models():
     )
     params = stream._params  # _OpenAIStream 持有 params
     assert "extra_body" in params
+    # primary 留在顶层，不进 models
+    assert params["model"] == "anthropic/claude-sonnet-4-5"
+    # extra_body["models"] 只含 fallback（端到端验证 Bug 1 的修复）
     assert params["extra_body"]["models"] == [
-        "anthropic/claude-sonnet-4-5",
         "openai/gpt-5",
         "google/gemini-2.5-pro",
     ]

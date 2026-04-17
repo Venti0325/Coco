@@ -23,6 +23,7 @@ def _clear_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "COCO_MODEL",
         "COCO_MAX_TOKENS",
         "COCO_EFFORT",
+        "COCO_FALLBACK_MODELS",
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_BASE_URL",
         "OPENAI_API_KEY",

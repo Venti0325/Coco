@@ -170,14 +170,16 @@ _FALLBACK_MAX_TOKENS = 8_192   # 保守兜底；未知模型通常支持 8192，
 def _infer_max_tokens(model: str, *, provider: Provider | None = None) -> int:
     """根据模型名前缀查表，未匹配时返回通用兜底值。
 
-    OpenRouter 路径：先尝试动态查询 /v1/models 的真实
-    ``top_provider.max_completion_tokens``；失败或未命中时回落到静态前缀表。
-    其他 provider 或无 provider 信息时直接走静态表。
+    OpenRouter 路径：先尝试从**已有**的内存/磁盘缓存读取真实
+    ``top_provider.max_completion_tokens``；**不发 HTTP**（启动不变量）。
+    缓存缺失或命中失败时回落到静态前缀表。其他 provider 或无 provider 信息时直接走静态表。
+
+    远程预热缓存由首次 LLM 请求路径负责，不在这条配置加载路径里做。
     """
     if provider == Provider.OPENROUTER and "/" in model:
         try:
             from .openrouter_models import lookup_max_completion_tokens
-            dynamic = lookup_max_completion_tokens(model)
+            dynamic = lookup_max_completion_tokens(model, allow_remote_fetch=False)
             if dynamic and dynamic > 0:
                 return dynamic
         except Exception:

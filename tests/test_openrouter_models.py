@@ -225,17 +225,38 @@ def test_save_disk_roundtrip():
 
 # ── 集成：_infer_max_tokens 走 OpenRouter 动态路径 ───────────────────
 
-def test_infer_max_tokens_uses_dynamic_for_openrouter(
+def test_infer_max_tokens_uses_dynamic_for_openrouter_when_cache_warm(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """provider=OPENROUTER + 命名空间 model → 动态值覆盖静态表。"""
+    """provider=OPENROUTER + 命名空间 model + **预热的磁盘缓存** → 动态值覆盖静态表。
+
+    启动路径用 allow_remote_fetch=False，所以需要先有磁盘缓存才能走动态分支。
+    模拟"上一次 LLM 请求已经预热了缓存"——写磁盘缓存然后测 _infer_max_tokens。
+    """
+    import time
     from core.config import _infer_max_tokens
     from core.models import Provider
 
-    monkeypatch.setattr(
-        "core.openrouter_models._fetch_remote",
-        lambda: {"anthropic/claude-sonnet-4-5": 99_999},  # 故意用"非正常"值证明来自动态
-    )
+    # 预热磁盘缓存（模拟之前某次请求已经拉过 /v1/models）
+    fake_cache = openrouter_models.openrouter_models_cache_file()
+    fake_cache.parent.mkdir(parents=True, exist_ok=True)
+    fake_cache.write_text(json.dumps({
+        "fetched_at": time.time(),
+        "data": [
+            {
+                "id": "anthropic/claude-sonnet-4-5",
+                "top_provider": {"max_completion_tokens": 99_999},
+            }
+        ],
+    }), encoding="utf-8")
+
+    def explode():
+        raise AssertionError(
+            "_infer_max_tokens startup path must not call _fetch_remote"
+        )
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", explode)
+
+    # 命中磁盘缓存，动态值 99_999 覆盖静态 32_000
     assert _infer_max_tokens(
         "anthropic/claude-sonnet-4-5", provider=Provider.OPENROUTER,
     ) == 99_999
@@ -287,3 +308,115 @@ def test_infer_max_tokens_skips_dynamic_for_non_namespaced_model(
     assert _infer_max_tokens(
         "claude-sonnet-4-5", provider=Provider.OPENROUTER,
     ) == 32_000
+
+
+# ── allow_remote_fetch=False 启动路径（Bug 2 修复的不变量）──────────
+
+
+def test_lookup_disk_only_mode_no_fetch_when_cold(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """allow_remote_fetch=False 且无任何缓存 → 立即 None，绝不触发 _fetch_remote。"""
+    def explode():
+        raise AssertionError(
+            "allow_remote_fetch=False must never call _fetch_remote"
+        )
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", explode)
+    assert lookup_max_completion_tokens(
+        "anthropic/claude-sonnet-4-5", allow_remote_fetch=False,
+    ) is None
+
+
+def test_lookup_disk_only_mode_uses_fresh_disk_cache(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """allow_remote_fetch=False + 有未过期磁盘缓存 → 返回磁盘值，不发网络。"""
+    import time
+    fake_cache = openrouter_models.openrouter_models_cache_file()
+    fake_cache.parent.mkdir(parents=True, exist_ok=True)
+    fake_cache.write_text(json.dumps({
+        "fetched_at": time.time(),  # 新鲜
+        "data": [
+            {"id": "foo/bar", "top_provider": {"max_completion_tokens": 4242}},
+        ],
+    }), encoding="utf-8")
+
+    def explode():
+        raise AssertionError("disk hit should not trigger network")
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", explode)
+
+    assert lookup_max_completion_tokens(
+        "foo/bar", allow_remote_fetch=False,
+    ) == 4242
+
+
+def test_lookup_disk_only_mode_uses_stale_disk_cache(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """allow_remote_fetch=False + 过期磁盘缓存 → 仍返回旧值，不尝试刷新。"""
+    fake_cache = openrouter_models.openrouter_models_cache_file()
+    fake_cache.parent.mkdir(parents=True, exist_ok=True)
+    fake_cache.write_text(json.dumps({
+        "fetched_at": 0.0,  # 很旧
+        "data": [
+            {"id": "foo/bar", "top_provider": {"max_completion_tokens": 1000}},
+        ],
+    }), encoding="utf-8")
+
+    def explode():
+        raise AssertionError("stale disk + disk-only must not refresh")
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", explode)
+
+    assert lookup_max_completion_tokens(
+        "foo/bar", allow_remote_fetch=False,
+    ) == 1000
+
+
+def test_load_settings_never_hits_network_for_openrouter(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """load_settings 路径在 OpenRouter + 冷缓存下绝不发网络（启动不变量）。
+
+    这条是 Bug 2 的直接回归保护——把 _fetch_remote 换成爆炸函数后，
+    load_settings 仍应正常返回，因为整条启动链路用 allow_remote_fetch=False。
+    """
+    import time
+    from argparse import Namespace
+    from core.config import load_settings
+    from core.models import Provider
+
+    def explode():
+        raise AssertionError("load_settings must not trigger _fetch_remote")
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", explode)
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        "core.config.user_config_file",
+        lambda: tmp_path / "missing.toml",
+    )
+    for key in (
+        "COCO_PROVIDER", "COCO_MODEL", "COCO_MAX_TOKENS", "COCO_EFFORT",
+        "COCO_FALLBACK_MODELS", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
+        "OPENAI_API_KEY", "OPENAI_BASE_URL",
+        "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("COCO_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setenv("COCO_MODEL", "anthropic/claude-sonnet-4-5")
+
+    args = Namespace(
+        prompt=None, print_mode=False, auto_approve=False,
+        provider=None, model=None, api_key=None, base_url=None,
+        max_tokens=None, effort=None,
+    )
+
+    t0 = time.monotonic()
+    s = load_settings(args, workspace=tmp_path)
+    elapsed = time.monotonic() - t0
+
+    # 回落到静态表 —— anthropic/claude-sonnet-4 前缀命中 32_000
+    assert s.provider == Provider.OPENROUTER
+    assert s.max_tokens == 32_000
+    # 启动要快：无网络分支应在毫秒级完成（放宽到 200ms 防 CI 抖动）
+    assert elapsed < 0.2, f"load_settings too slow: {elapsed*1000:.1f}ms"
