@@ -446,10 +446,56 @@ benchmark baseline 完成并跑过并行工具后，再跑这项对比：
 
 ## Summary
 
-> 待实现后填写。
->
-> - 实际改动：新文件（microcompact.py / context_window.py）+ 修改文件（main.py / commands.py / compact.py）
-> - Benchmark 对比：长任务成功率、平均 token
-> - 踩坑：tool_use_id ↔ tool_name 反查、占位符格式、估算 vs 真实 usage 的偏差
-> - 未来工作：prompt caching 感知
-> - commit / PR 链接
+### 实际改动
+
+新文件：
+- `src/core/context_window.py`（~60 LOC）—— `context_window_for(model)` 按前缀表查找；覆盖 Anthropic/OpenAI/Gemini/DeepSeek/Meta Llama/x.ai Grok/Qwen + OpenRouter 命名空间；128K 兜底
+- `src/core/microcompact.py`（~140 LOC）—— `micro_compact()` 选择性裁剪早期 Read/Glob/Grep/Shell 结果；含 `COMPACTABLE_TOOLS` 白名单、`RECENT_TURNS_KEPT=3` 保护窗口、`_MIN_BODY_BYTES_TO_COMPACT=400` 下限、`_identify_tool_name_for_result()` 反查
+- `tests/test_context_window.py`（~55 LOC）—— 覆盖各 provider 命名空间与兜底
+- `tests/test_microcompact.py`（~220 LOC）—— 9 个单测覆盖 skip recent / replace Read / stop-on-target / skip non-compactable / skip small / placeholder-size / preserve-text-block / no-op-empty / placeholder 预算常量
+
+修改文件：
+- `src/core/compact.py` —— 新增 `_OUTPUT_RESERVED_TOKENS=20_000`、`_MICRO_COMPACT_THRESHOLD_PCT=70`、`_FULL_COMPACT_THRESHOLD_PCT=85`、`_POST_COMPACT_TARGET_PCT=50`、`_budget()`、`should_micro_compact()`、`should_full_compact()`、`compact_target_tokens()`
+- `src/core/commands.py` —— `ReplState.session_usage: TokenUsage` 字段；`/compact --micro` 子命令（target = 30% window）；`/doctor` 追加 Context 水位行；`_COMMAND_HELP` 更新 `/compact` 描述
+- `src/core/main.py` —— 新 `_print_turn_usage(turn, session, settings)` 函数；`_run_query` 新增 `session_usage` 参数并在成功后累加 + 打印；`_run_full_compact` 抽出；`_auto_compact_if_needed` 重写为三级级联（token-based micro/full + 无 usage 时回落按消息数）
+- `tests/test_compact.py` —— 5 个新阈值测试（70% / 85% / target 50% / 低水位 target=0 / tiny window 防崩）
+- `docs/changelog.md` —— (planned) → (done) 并写清 Summary
+
+### 测试
+
+- `pytest tests/ -q` → **242 passed, 2 skipped**（baseline 209 + 新增 33）
+- 没有引入 flaky 或 skip；全部确定性本地逻辑
+
+### 与计划的偏差
+
+1. 计划片段里 `micro_compact` 使用 `continue` 后 `new_blocks.extend(content[len(new_blocks):])` 的提前返回方案对跨消息 stop 逻辑处理偏弱。改为"达标后用 `done_here` 标志完成当前 block 循环、再用外层 break 跳出消息循环"，语义更清晰，同一条 user 消息内的其余 block（text / 其它 tool_result）保持原样
+2. 计划片段里`recent_turns_kept` 保留语义是"最近 N 轮 assistant 出现之后的消息不碰"。实现时以 `running_turn >= total_turns - recent_turns_kept` 作为断点，覆盖测试 `test_micro_compact_skips_recent_turns`：5 轮 assistant、kept=3 → 仅 turn 1 的 user tool_result 可裁（turn 2 已进入保护区）。这样偏保守，但避免"切断 tool_use 和 tool_result 配对"的风险
+3. `/doctor` Context 水位实现上用 `log.info` 的 `ok` 图标而不是 plan 片段里的 "ℹ"（与文件内其它图标保持一致）
+4. `_print_turn_usage` 里的 warning 依 plan Step 4 加在了同一个函数内，而不是独立函数
+
+### Step 1 前置已落地说明
+
+`SessionMeta.tool_time_ms / tokens_in / tokens_out`、`SessionStore.save_transcript()` 三个可选参数、`_run_query` 调 `save_transcript` 写入 usage ——这些已在 `4dbefb6 feat:tool_time_ms` 中完成。本次只补了 REPL 显示侧（`ReplState.session_usage` + `_print_turn_usage` + 累加）。
+
+### 踩坑
+
+1. `tool_result` 里没有 `tool_name`，只有 `tool_use_id`；必须回查 assistant 消息里的 `tool_use` 块——`_identify_tool_name_for_result()` 用 `str(id)` 比对避免 int/str 类型差异
+2. `int(180000 * 0.70) == 125999`（float 精度），而 `180000 * 70 / 100 = 126000.0`——边界测试改用 `budget * 70 // 100` 先算整数再减 1 做 off-by-one 验证
+3. `test_micro_compact_stops_when_target_met` 第一版靠"target=100 就能在裁一个后 freed >= target"成立；5k chars / 4 = 1250 tokens，远超 100，裁 1 个即可停
+4. 小 window（< reserved）场景需要早返回 False 而不是算出负阈值——加了 `_budget()` 保护
+
+### 验证待后续
+
+Benchmark 验证待后续 session（当前 workspace 小，micro-compact 触发不了 70% 阈值；需要构造长对话任务）。下个 session 应在 benchmarks 里加一个构造性任务：`Read` 3-5 个 ≥ 30k tokens 的虚构文件、不用它们做主任务，测量 prompt size 随轮次变化对比 baseline/context-engineering。
+
+### 未来工作
+
+- prompt caching 感知：`cache_read_input_tokens` 不计入 budget（当前实现只看 `input_tokens`，与 Claude cache hit 行为保守兼容）
+- 模型特定 budget 调优：Opus/Sonnet 不同百分比
+- Session resume 时恢复 `session_usage`（当前 resume 会把 usage 清零）
+
+### commit / PR
+
+- Branch: `feat/context-engineering`
+- Commit: `feat:context engineering(三级auto-compact+micro-compact+token水位显示)`
+- Not pushed per task instructions

@@ -19,6 +19,51 @@ COMPACT_MAX_OUTPUT_TOKENS = 4096  # 仅用于说明；当前实现使用 LLMClie
 # 自动压缩（按消息条数触发）：含本次输入后消息总数超过该阈值则触发
 AUTO_COMPACT_MESSAGE_LIMIT = 20
 
+# ── 基于 token 预算的三级压缩阈值 ─────────────────────────────────────
+# 预留给输出 / 工具 round-trip 的 token（从总窗口扣除后作为"可用预算"）。
+_OUTPUT_RESERVED_TOKENS = 20_000
+
+# micro-compact 触发阈值：可用预算利用率超过 70% 时启动轻量裁剪。
+_MICRO_COMPACT_THRESHOLD_PCT = 70
+
+# 整体 summary compact 阈值：达到 85% 时走 ``CompactService.compact``。
+_FULL_COMPACT_THRESHOLD_PCT = 85
+
+# compact 完成后希望回落到的水位线（可用预算的比例）。
+_POST_COMPACT_TARGET_PCT = 50
+
+
+def _budget(context_window: int) -> int:
+    """可用预算 = 总窗口 − 预留输出。保证非负。"""
+    return max(0, int(context_window) - _OUTPUT_RESERVED_TOKENS)
+
+
+def should_micro_compact(session_tokens: int, context_window: int) -> bool:
+    """累计 token 是否越过 micro-compact 阈值（70%）。"""
+    budget = _budget(context_window)
+    if budget <= 0:
+        return False
+    threshold = budget * _MICRO_COMPACT_THRESHOLD_PCT / 100
+    return session_tokens >= threshold
+
+
+def should_full_compact(session_tokens: int, context_window: int) -> bool:
+    """累计 token 是否越过 full-compact 阈值（85%）。"""
+    budget = _budget(context_window)
+    if budget <= 0:
+        return False
+    threshold = budget * _FULL_COMPACT_THRESHOLD_PCT / 100
+    return session_tokens >= threshold
+
+
+def compact_target_tokens(session_tokens: int, context_window: int) -> int:
+    """为了把水位拉回到 50%，还需要释放多少 token。"""
+    budget = _budget(context_window)
+    if budget <= 0:
+        return 0
+    target_session = budget * _POST_COMPACT_TARGET_PCT / 100
+    return max(0, int(session_tokens - target_session))
+
 COMPACT_PROMPT = """\
 Please provide a detailed summary of our conversation so far. This summary will \
 replace earlier messages to free up context space, so it must preserve every \

@@ -17,9 +17,18 @@ if sys.platform == "win32":
 from core import __version__
 from core.paths import config_home, data_home, ensure_dir, history_file, state_home
 from core.config import load_settings
-from core.models import AbortedError, AppSettings
+from core.models import AbortedError, AppSettings, TokenUsage
 from core.commands import CommandContext, ReplState, dispatch_slash
-from core.compact import AUTO_COMPACT_MESSAGE_LIMIT, CompactService, should_compact_by_message_count
+from core.compact import (
+    AUTO_COMPACT_MESSAGE_LIMIT,
+    CompactService,
+    compact_target_tokens,
+    should_compact_by_message_count,
+    should_full_compact,
+    should_micro_compact,
+)
+from core.context_window import context_window_for
+from core.microcompact import micro_compact
 from core.context import build_system_prompt
 from core.skills import build_skills_prompt_section, discover_skills
 from core.skills_bundled import register_bundled_skills
@@ -183,6 +192,41 @@ def _tool_preview(name: str, inp: dict) -> str:
     return ""
 
 
+# ── Token 用量显示 ────────────────────────────────────────────────────
+
+def _print_turn_usage(
+    turn: TokenUsage,
+    session: TokenUsage,
+    settings: AppSettings,
+) -> None:
+    """打印本轮 token 消耗 + 累计会话用量；接近上限时追加警告。"""
+    window = context_window_for(settings.model)
+    used_pct = (session.input_tokens / window * 100) if window else 0
+
+    parts: list[str] = [
+        f"in:{turn.input_tokens:,}",
+        f"out:{turn.output_tokens:,}",
+    ]
+    if turn.cache_read:
+        parts.append(f"cache:{turn.cache_read:,}")
+    parts.append(
+        f"· session: {session.input_tokens:,}+{session.output_tokens:,}"
+    )
+    if window:
+        parts.append(f"({used_pct:.0f}% of {window:,})")
+    log.dim("  " + "  ".join(parts))
+
+    # 接近上限时给出可见提示；下一轮 _auto_compact_if_needed 会实际触发动作。
+    if window and used_pct >= 85:
+        log.warn(
+            f"  ⚠ 上下文即将耗尽（{used_pct:.0f}% of {window:,}）——下一轮将触发全量 compact"
+        )
+    elif window and used_pct >= 70:
+        log.dim(
+            f"  · 上下文接近满载（{used_pct:.0f}%）——下一轮将启用 micro-compact"
+        )
+
+
 # ── CLI 参数解析 ──────────────────────────────────────────────────────
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -320,8 +364,12 @@ def entry() -> None:
         *,
         chat_messages: list,
         session_store: SessionStore | None,
+        session_usage: TokenUsage | None = None,
     ) -> bool:
-        """返回是否成功完成一轮（用于决定是否写会话）。"""
+        """返回是否成功完成一轮（用于决定是否写会话）。
+
+        ``session_usage`` 非空时，会在本轮成功后累加本轮 usage 并打印水位。
+        """
         console = log.get_console()
         live: Live | None = None
         _streaming = [False]   # 是否已进入流式文本阶段
@@ -425,6 +473,17 @@ def entry() -> None:
             )
         chat_messages.clear()
         chat_messages.extend(result.messages)
+
+        # 累计 token 用量 + REPL 水位显示（仅交互模式有 session_usage）。
+        if session_usage is not None and result.usage:
+            session_usage.add(
+                inp=result.usage.input_tokens,
+                out=result.usage.output_tokens,
+                cache_r=result.usage.cache_read,
+                cache_c=result.usage.cache_create,
+            )
+            if not args.print_mode:
+                _print_turn_usage(result.usage, session_usage, settings)
         return True
 
     def _run_skill_fork(
@@ -477,23 +536,14 @@ def entry() -> None:
         except Exception:
             pass
 
-    def _auto_compact_if_needed(
+    def _run_full_compact(
         *,
-        incoming_user_text: str,
         chat_messages: list,
         session_store: SessionStore | None,
         system: str,
     ) -> None:
-        # “含本次输入”口径：历史消息条数 + 1（当前用户输入）超过阈值则先压缩历史
-        if not should_compact_by_message_count(
-            chat_messages,
-            incoming_messages=1,
-            limit=AUTO_COMPACT_MESSAGE_LIMIT,
-        ):
-            return
         if session_store is None:
             return
-        _ = incoming_user_text
         try:
             new_msgs, _summary = compact_service.compact(
                 list(chat_messages),
@@ -513,6 +563,69 @@ def entry() -> None:
             pass
         log.dim(f"已自动压缩对话：{before} → {len(new_msgs)} 条消息")
 
+    def _auto_compact_if_needed(
+        *,
+        incoming_user_text: str,
+        chat_messages: list,
+        session_store: SessionStore | None,
+        system: str,
+        session_usage: TokenUsage,
+    ) -> None:
+        """按累计 token 水位做三级自动 compact：
+
+        - 超过 85% → 整体 LLM summary（老路径）
+        - 超过 70% → 本地 micro-compact 裁剪早期工具结果
+        - 无 token 数据（usage 未回传）→ 回落到按消息条数触发
+        """
+        if session_store is None:
+            return
+        _ = incoming_user_text
+
+        window = context_window_for(settings.model)
+        used = session_usage.input_tokens  # 只看累计 input（output 每轮都是新的）
+
+        # 无真实 token 数据：保持旧行为（按消息条数触发全量 summary）
+        if used <= 0:
+            if should_compact_by_message_count(
+                chat_messages,
+                incoming_messages=1,
+                limit=AUTO_COMPACT_MESSAGE_LIMIT,
+            ):
+                _run_full_compact(
+                    chat_messages=chat_messages,
+                    session_store=session_store,
+                    system=system,
+                )
+            return
+
+        # 优先走 micro-compact（70% ≤ used < 85%）
+        if should_micro_compact(used, window) and not should_full_compact(used, window):
+            target = compact_target_tokens(used, window)
+            if target > 0:
+                new_msgs, freed, count = micro_compact(
+                    chat_messages,
+                    target_free_tokens=target,
+                )
+                if freed > 0:
+                    chat_messages.clear()
+                    chat_messages.extend(new_msgs)
+                    try:
+                        session_store.save_transcript(new_msgs)
+                    except Exception:
+                        pass
+                    log.dim(
+                        f"已裁剪 {count} 个旧工具结果，释放 ~{freed:,} tokens"
+                    )
+                    return
+
+        # micro 不够 / 已经越过 85% → 全量 summary
+        if should_full_compact(used, window):
+            _run_full_compact(
+                chat_messages=chat_messages,
+                session_store=session_store,
+                system=system,
+            )
+
     if args.prompt:
         if not _api_configured(settings):
             log.error("需要配置 API 密钥后才能执行 one-shot 请求。")
@@ -526,6 +639,7 @@ def entry() -> None:
             args.prompt,
             chat_messages=[],
             session_store=one_shot_store,
+            session_usage=None,
         )
     else:
         if not _api_configured(settings):
@@ -630,6 +744,7 @@ def entry() -> None:
                 chat_messages=repl_state.chat_messages,
                 session_store=repl_state.session_store,
                 system=cmd_ctx.system_prompt or system_prompt,
+                session_usage=repl_state.session_usage,
             )
 
             # inline skill 约束：allowed_tools / disable_model_invocation
@@ -653,6 +768,7 @@ def entry() -> None:
                 text,
                 chat_messages=repl_state.chat_messages,
                 session_store=repl_state.session_store,
+                session_usage=repl_state.session_usage,
             )
             # /init 等命令会在 pending_input 运行后注册回调（例如更新 system_prompt）
             if repl_state.post_run_callback is not None:
