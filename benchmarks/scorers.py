@@ -339,6 +339,47 @@ def _turns_under(
     return False, f"turns={turns} > {limit}"
 
 
+def _tool_log_regex(
+    params: dict[str, Any], workspace: Path, answer: str, session: list[dict]
+) -> tuple[bool, str]:
+    """遍历 session 里 assistant 消息的 tool_use 块，用正则匹配工具名。
+
+    用于验证特定工具路径（如 ``mcp__*``）真的被调用，而不仅仅是答案恰好正确。
+    参数 ``pattern``：作用于 tool_use.name 的正则；``min_matches`` 最少命中数（默认 1）。
+    """
+
+    pattern = params.get("pattern")
+    if not pattern:
+        return False, "missing 'pattern'"
+    try:
+        rx = re.compile(str(pattern))
+    except re.error as e:
+        return False, f"invalid regex: {e}"
+    min_matches = int(params.get("min_matches", 1))
+    if not session:
+        return False, "no session data (need session for tool_log)"
+
+    hits: list[str] = []
+    for msg in session:
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+            ):
+                name = str(block.get("name", ""))
+                if rx.search(name):
+                    hits.append(name)
+    if len(hits) >= min_matches:
+        sample = hits[:3]
+        return True, f"{len(hits)} hit(s) matching {pattern!r} (e.g. {sample})"
+    return False, f"{len(hits)} hit(s) for {pattern!r} < min_matches={min_matches}"
+
+
 # ── 注册表 ────────────────────────────────────────────────────────────
 
 SCORERS: dict[str, ScorerFn] = {
@@ -352,4 +393,5 @@ SCORERS: dict[str, ScorerFn] = {
     "grep_regex":       _grep_regex,
     "python_assert":    _python_assert,
     "turns_under":      _turns_under,
+    "tool_log_regex":   _tool_log_regex,
 }

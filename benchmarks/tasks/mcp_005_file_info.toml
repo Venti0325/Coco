@@ -1,0 +1,20 @@
+id = "mcp_005_file_info"
+category = "mcp-integration"
+description = "Get file size via MCP filesystem server"
+prompt = """Use the mcp__fs__get_file_info tool to find the size in bytes of data.txt in this workspace. Answer with just the number of bytes (as digits only)."""
+workspace = "mcp_005_file_info"
+max_turns = 4
+timeout_sec = 120
+auto_approve = true
+
+[[scorers]]
+type = "answer_matches"
+pattern = "\\b10\\b"
+
+[[scorers]]
+type = "tool_log_regex"
+pattern = "^mcp__fs__"
+min_matches = 1
+
+[[scorers]]
+type = "no_file_modified"

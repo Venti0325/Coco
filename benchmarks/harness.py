@@ -55,6 +55,8 @@ class TaskDef:
     timeout_sec: int = 180
     scorers: list[ScorerDef] = field(default_factory=list)
     toml_path: Path | None = None  # 可选，便于报告里追溯来源
+    # 某些任务（如 MCP 集成）涉及非只读工具且无人交互；显式声明跳过权限确认。
+    auto_approve: bool = False
 
 
 @dataclass
@@ -137,6 +139,7 @@ def load_task(toml_path: Path, *, tasks_root: Path | None = None) -> TaskDef:
         timeout_sec=int(data.get("timeout_sec", 180)),
         scorers=scorers,
         toml_path=toml_path,
+        auto_approve=bool(data.get("auto_approve", False)),
     )
 
 
@@ -230,8 +233,10 @@ def _build_subprocess_cmd(task: TaskDef, settings: RunSettings) -> list[str]:
         "--print",
         "--provider", settings.provider,
         "--model", settings.model,
-        task.prompt,
     ]
+    if task.auto_approve:
+        cmd.append("--auto-approve")
+    cmd.append(task.prompt)
     return cmd
 
 

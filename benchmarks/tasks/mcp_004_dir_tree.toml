@@ -1,0 +1,21 @@
+id = "mcp_004_dir_tree"
+category = "mcp-integration"
+description = "Inspect directory structure via MCP filesystem server"
+prompt = """Use the mcp__fs__directory_tree tool on this workspace. Then answer with the names of the top-level subdirectories under src/ (just the names, comma-separated, no paths)."""
+workspace = "mcp_004_dir_tree"
+max_turns = 4
+timeout_sec = 120
+auto_approve = true
+
+[[scorers]]
+type = "answer_contains"
+values = ["app", "lib"]
+case_sensitive = false
+
+[[scorers]]
+type = "tool_log_regex"
+pattern = "^mcp__fs__"
+min_matches = 1
+
+[[scorers]]
+type = "no_file_modified"

@@ -1,0 +1,20 @@
+id = "mcp_002_list_dir"
+category = "mcp-integration"
+description = "List directory contents via MCP filesystem server and count files"
+prompt = """Use the mcp__fs__list_directory tool (NOT the built-in Glob tool) to list the contents of the src/ directory in this workspace. Answer with just the number of files in src/ (as a single digit)."""
+workspace = "mcp_002_list_dir"
+max_turns = 4
+timeout_sec = 120
+auto_approve = true
+
+[[scorers]]
+type = "answer_matches"
+pattern = "\\b4\\b"
+
+[[scorers]]
+type = "tool_log_regex"
+pattern = "^mcp__fs__"
+min_matches = 1
+
+[[scorers]]
+type = "no_file_modified"

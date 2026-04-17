@@ -1,0 +1,20 @@
+id = "mcp_003_search_todos"
+category = "mcp-integration"
+description = "Find files matching a pattern via MCP filesystem server"
+prompt = """Use the mcp__fs__search_files tool (NOT built-in Grep) to find all .py files in this workspace whose filename contains 'todo'. Answer with just the number found (as a single digit)."""
+workspace = "mcp_003_search_todos"
+max_turns = 4
+timeout_sec = 120
+auto_approve = true
+
+[[scorers]]
+type = "answer_matches"
+pattern = "\\b2\\b"
+
+[[scorers]]
+type = "tool_log_regex"
+pattern = "^mcp__fs__"
+min_matches = 1
+
+[[scorers]]
+type = "no_file_modified"

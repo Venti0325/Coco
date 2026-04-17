@@ -1,0 +1,20 @@
+id = "mcp_001_read_file"
+category = "mcp-integration"
+description = "Read a file via MCP filesystem server and extract a specific sentence"
+prompt = """Use the mcp__fs__read_text_file tool (NOT the built-in Read tool) to read README.md in this workspace. Then answer with the one-sentence project description it contains. Return only that sentence, verbatim."""
+workspace = "mcp_001_read_file"
+max_turns = 4
+timeout_sec = 120
+auto_approve = true
+
+[[scorers]]
+type = "answer_contains"
+value = "Coco is a lightweight terminal AI coding assistant"
+
+[[scorers]]
+type = "tool_log_regex"
+pattern = "^mcp__fs__"
+min_matches = 1
+
+[[scorers]]
+type = "no_file_modified"
