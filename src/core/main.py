@@ -511,11 +511,15 @@ def entry() -> None:
         if not _api_configured(settings):
             log.error("需要配置 API 密钥后才能执行 one-shot 请求。")
             sys.exit(1)
+        # 即便 --print 模式也保存 JSONL：benchmark harness 等外部工具
+        # 依赖此文件还原 turns / usage / tool_log。会话文件按 workspace
+        # 隔离，不会污染交互会话列表。
+        one_shot_store = SessionStore(workspace, settings.model)
         _run_query(
             _make_engine(system_prompt, workspace=workspace),
             args.prompt,
             chat_messages=[],
-            session_store=None,
+            session_store=one_shot_store,
         )
     else:
         if not _api_configured(settings):
