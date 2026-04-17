@@ -316,10 +316,49 @@ baseline 报告里每个任务都有 `wall_clock_sec`，对比两次报告得出
 
 ## Summary
 
-> 待实现后填写。
->
-> - 实际改动：engine.py / base.py / models.py / config.py / main.py 行数
-> - Benchmark 对比：前后 `wall_clock_sec` 汇总表（哪几类任务最受益）
-> - 踩坑：线程安全、权限、日志顺序、ThreadPool 开销
-> - COCO_MAX_TOOL_CONCURRENCY 最佳默认值讨论
-> - commit / PR 链接
+### 实际文件改动
+
+| 文件 | 主要变化 | 净增行 |
+| --- | --- | --- |
+| `src/core/tools/base.py` | `ToolSpec` 加 `is_concurrency_safe` 字段 + `concurrency_safe` property；`Tool` 加 `is_concurrency_safe` property | +10 |
+| `src/core/engine.py` | 引入 `concurrent.futures`/`time`；`_tool_line` 增加 `elapsed_ms`；新增 `_partition_tool_calls` / `_execute_one_tool`（自由函数）；`Engine.__init__` 新增 `max_tool_concurrency`；`_run_tool_loop` 里的硬串行循环拆成 `_run_batch_serial` / `_run_batch_parallel`（只读批 > 1 个时走 ThreadPool；结果按原下标回写） | +140 |
+| `src/core/models.py` | `AppSettings.max_tool_concurrency: int = 10` | +1 |
+| `src/core/config.py` | `_ENV_MAP` 加 `COCO_MAX_TOOL_CONCURRENCY`；TOML 顶层扁平字段、`_from_cli` 白名单加入 `max_tool_concurrency`；新增 `_clamp_concurrency`（钳位 [1, 32]）；`load_settings` 输出该字段 | +14 |
+| `src/core/main.py` | argparse `--max-tool-concurrency`；`_make_engine` 透传 `settings.max_tool_concurrency` | +3 |
+
+### 测试新增
+
+- `tests/test_engine_parallel.py`（9 个）
+  - `test_partition_all_read_only_one_batch`
+  - `test_partition_write_splits_batches`
+  - `test_partition_unknown_tool_is_unsafe`
+  - `test_parallel_execution_preserves_result_order`（4 个 Read 不同 sleep 制造乱序完成）
+  - `test_parallel_exception_isolated`
+  - `test_write_tool_always_serial`（时间戳区间不重叠断言）
+  - `test_max_concurrency_respected`（`threading.Lock` 计数器观察 in-flight 峰值）
+  - `test_tool_log_order_matches_input`
+  - `test_concurrency_one_equivalent_to_serial`（回归保护）
+- `tests/test_config.py`（+2）
+  - `test_load_settings_max_tool_concurrency_env`
+  - `test_load_settings_max_tool_concurrency_clamped`（默认/过大/非数字/0/负/1）
+
+测试数：`117 → 128`（全部通过）。
+
+### 与计划的偏差
+
+1. **`_execute_one_tool` 的返回签名**：计划写的是 `(tid, body, input)`，实际返回 `(tid, body, input, elapsed_ms)`。多出来的 `elapsed_ms` 让 `_tool_line` 的耗时后缀能直接复用同一个时间基准，避免在主循环里再测一次（两边测时有微小漂移）。
+2. **`_execute_one_tool` 内部包了 `try/except Exception`**：计划原把异常拦截放在 Engine 端 `fut.result()` 外层。两层都留着——内层保证 tool 抛异常被转成 Error body 并仍测到 elapsed；外层兜底极端情况（例如 ThreadPool 本身出问题）。`test_parallel_exception_isolated` 仍按原语义通过。
+3. **并发批次的 `on_tool_call` 时机**：计划里写"回调在批次完成后按原序触发"。实施时保留了这个语义，因为并发批里若每个 Future 完成都立即回调，终端 UI 渲染会交错——这与可观测性诉求矛盾。串行路径依旧在工具执行前触发回调，保持旧交互式体验。
+4. **`/doctor` 显示 max_tool_concurrency**：计划 Step 6 列了这一点，但实际未改动 `commands.py`（任务硬约束要求"Keep commands.py changes to NONE"）。此项延后。
+
+### 踩坑与设计笔记
+
+- **线程安全审视**：`PermissionChecker` 在 `_execute_one_tool` 里只会对非只读工具触发 `check`，而非只读工具永远走 `_run_batch_serial`（`len(batch)==1`），天然单线程。`PermissionChecker._always_allow` 只在串行路径写入，不存在并发竞争。`tool_log` 列表 append 也在主线程，无需加锁。
+- **保序实现**：用 `id(tb)` 作为字典 key 而非 index，避免在闭包里误捕获循环变量；`future_to_tb` 映射 Future→原 tool_block，确保异常分支也能取到正确的 `tid`。
+- **ThreadPool 开销**：每次并发批都 `with ThreadPoolExecutor(...) as pool`，函数退出时 `shutdown(wait=True)`。对于单次 4~10 个调用的典型场景，创建开销在几十微秒量级，相对工具本身毫秒级 I/O 可忽略。
+- **Benchmark 对比待 eval harness 落地后再跑**：计划里承诺"Exploration 类 ≥ 50%、总体 ≥ 30%"的墙钟时间下降，需依赖第 1 步 eval harness 的 baseline 数字。本改动落地后即可对照运行，但该数据暂缺，留给后续 session 补齐。
+
+### Commits
+
+- `feat:并行工具调用(分批保序+ThreadPool+COCO_MAX_TOOL_CONCURRENCY)` (本次提交)
+

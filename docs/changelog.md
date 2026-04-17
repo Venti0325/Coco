@@ -12,7 +12,7 @@
 ## 2026-04-16
 
 - **(planned)** Eval harness：`benchmarks/` 目录 + 20 个种子任务 + 可组合 scorer + markdown 报告。用于量化其他三项改动的收益。**优先实施**，因为 baseline 数字是后续所有改动的对照组 → [sessions/2026-04-16-eval-harness.md](sessions/2026-04-16-eval-harness.md)
-- **(planned)** 并行工具调用：`ToolSpec.is_concurrency_safe`（默认跟随 `is_read_only`）+ engine 按并发安全性分批 + `ThreadPoolExecutor` 并行执行 + 结果保序；`COCO_MAX_TOOL_CONCURRENCY` 可配（默认 10）→ [sessions/2026-04-16-parallel-tools.md](sessions/2026-04-16-parallel-tools.md)
+- **(done)** 并行工具调用：`ToolSpec.is_concurrency_safe`（默认跟随 `is_read_only`）+ `_partition_tool_calls` 按并发安全性分批 + `ThreadPoolExecutor` 并行执行只读批次（Write/Edit/Shell 仍串行）；`result_blocks` 按输入下标预分配，`tool_log`/`on_tool_call` 按原序触发；`AppSettings.max_tool_concurrency`（env `COCO_MAX_TOOL_CONCURRENCY`、CLI `--max-tool-concurrency`，钳位 [1, 32]，默认 10，=1 回归串行） → [sessions/2026-04-16-parallel-tools.md](sessions/2026-04-16-parallel-tools.md)
 - **(planned)** Context engineering：真实 token 追踪 + REPL 水位显示；`context_window.py` 按模型推断窗口；`microcompact.py` 选择性裁剪早期工具结果（Read/Grep/Glob/Shell）为占位符；三级 auto-compact（70% micro / 85% full）→ [sessions/2026-04-16-context-engineering.md](sessions/2026-04-16-context-engineering.md)
 - **(planned)** MCP 协议（MVP）：基于官方 `mcp` Python SDK + async→sync 桥 + 多 server 懒启动管理 + `MCPTool` adapter 走 `mcp__<server>__<tool>` 命名空间 + `.coco/mcp_servers.toml` 配置 + `/mcp` 状态命令 → [sessions/2026-04-16-mcp.md](sessions/2026-04-16-mcp.md)
 

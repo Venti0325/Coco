@@ -49,6 +49,7 @@ class AppSettings:
     effort: str | None = None          # low / medium / high（OpenAI 推理力度）
     max_steps: int = 10                # 简单任务工具循环上限
     max_steps_complex: int = 20        # 复杂任务工具循环上限
+    max_tool_concurrency: int = 10     # 单批并发工具上限（1 = 纯串行）
 
 
 # ── Token 用量追踪 ────────────────────────────────────────────────────
