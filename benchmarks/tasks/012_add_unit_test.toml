@@ -1,0 +1,16 @@
+id = "012_add_unit_test"
+category = "multi-file"
+description = "Add a pytest unit test for an existing function"
+prompt = "There is a function `reverse_string` in `src/text.py`. Add a pytest test file at `tests/test_text.py` that imports and tests at least two behaviours of `reverse_string` (e.g. 'abc' → 'cba', '' → ''). Make sure `pytest tests/` passes."
+workspace = "012_add_unit_test"
+max_turns = 8
+timeout_sec = 240
+
+[[scorers]]
+type = "file_exists"
+path = "tests/test_text.py"
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -m pytest tests/ -q"
+timeout = 60

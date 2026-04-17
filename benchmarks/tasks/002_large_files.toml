@@ -1,0 +1,14 @@
+id = "002_large_files"
+category = "exploration"
+description = "List all Python files longer than 200 lines"
+prompt = "List all Python files in this project that have strictly more than 200 lines. Answer with a newline-separated list of relative paths."
+workspace = "002_large_files"
+max_turns = 6
+timeout_sec = 120
+
+[[scorers]]
+type = "answer_contains"
+value = ["src/big_module.py", "src/also_big.py"]
+
+[[scorers]]
+type = "no_file_modified"

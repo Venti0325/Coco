@@ -1,0 +1,27 @@
+id = "010_print_to_logging"
+category = "single-edit"
+description = "Replace print(...) calls with logger.info(...)"
+prompt = "In `src/service.py`, replace all `print(...)` calls with `logger.info(...)`. Also add a module-level `logger = logging.getLogger(__name__)` and the `import logging` line if they're missing. Keep the existing messages."
+workspace = "010_print_to_logging"
+max_turns = 8
+timeout_sec = 180
+
+[[scorers]]
+type = "grep_regex"
+pattern = "logger\\.info\\("
+path = "src/service.py"
+glob = "*.py"
+min_matches = 2
+
+[[scorers]]
+type = "grep_regex"
+pattern = "^\\s*print\\("
+path = "src/service.py"
+glob = "*.py"
+min_matches = 0
+max_matches = 0
+
+[[scorers]]
+type = "file_contains"
+path = "src/service.py"
+value = "import logging"

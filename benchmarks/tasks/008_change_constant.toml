@@ -1,0 +1,20 @@
+id = "008_change_constant"
+category = "single-edit"
+description = "Change MAX_SIZE from 100 to 200"
+prompt = "In `src/config.py`, change the constant `MAX_SIZE = 100` to `MAX_SIZE = 200`. Do not modify anything else."
+workspace = "008_change_constant"
+max_turns = 5
+timeout_sec = 120
+
+[[scorers]]
+type = "file_contains"
+path = "src/config.py"
+value = "MAX_SIZE = 200"
+
+[[scorers]]
+type = "grep_regex"
+pattern = "MAX_SIZE\\s*=\\s*100"
+path = "src/config.py"
+glob = "*.py"
+min_matches = 0
+max_matches = 0

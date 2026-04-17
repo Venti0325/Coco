@@ -1,0 +1,23 @@
+id = "020_argparse_cli"
+category = "build"
+description = "Implement a simple argparse CLI"
+prompt = "Create `src/tool.py` that uses argparse to provide a CLI named `tool`. It must accept `--name <string>` and print `hello, <name>!`. `python -m src.tool --help` must succeed and mention `--name`; `python -m src.tool --name world` must print `hello, world!`."
+workspace = "020_argparse_cli"
+max_turns = 10
+timeout_sec = 240
+
+[[scorers]]
+type = "file_exists"
+path = "src/tool.py"
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -m src.tool --help"
+timeout = 20
+expect_stdout_contains = "--name"
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -m src.tool --name world"
+timeout = 20
+expect_stdout_contains = "hello, world!"

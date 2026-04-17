@@ -1,0 +1,12 @@
+id = "017_missing_return"
+category = "debug"
+description = "Fix a function that returns None due to missing return"
+prompt = "The function `find_user` in `src/lookup.py` is always returning None even when it should return a user. Fix the bug. Tests in `tests/` must pass."
+workspace = "017_missing_return"
+max_turns = 8
+timeout_sec = 180
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -m pytest tests/ -q"
+timeout = 60

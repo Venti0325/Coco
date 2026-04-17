@@ -1,0 +1,19 @@
+id = "006_add_docstring"
+category = "single-edit"
+description = "Add a docstring to the `add` function"
+prompt = "Open `src/utils.py`. The function `add` has no docstring. Add a short, clear Python docstring describing what the function does. Do not change behaviour or signatures."
+workspace = "006_add_docstring"
+max_turns = 6
+timeout_sec = 180
+
+[[scorers]]
+type = "grep_regex"
+pattern = 'def add\([^)]*\)[^:]*:\s*\n\s*"""'
+path = "src/utils.py"
+glob = "*.py"
+min_matches = 1
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -m pytest tests/ -q"
+timeout = 60

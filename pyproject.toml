@@ -21,10 +21,13 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 
 [project.scripts]
 coco = "core.main:entry"
+coco-bench = "benchmarks.run:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "."]
+include = ["core*", "benchmarks*"]
+exclude = ["tests*", "benchmarks.tasks*", "benchmarks.results*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]

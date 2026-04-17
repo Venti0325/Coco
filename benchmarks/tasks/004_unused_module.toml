@@ -1,0 +1,14 @@
+id = "004_unused_module"
+category = "exploration"
+description = "Identify a python module that is never imported"
+prompt = "One python module under `src/` is never imported anywhere else in the project. Which file is it? Answer with just its relative path."
+workspace = "004_unused_module"
+max_turns = 6
+timeout_sec = 120
+
+[[scorers]]
+type = "answer_contains"
+value = "src/legacy/old_helper.py"
+
+[[scorers]]
+type = "no_file_modified"

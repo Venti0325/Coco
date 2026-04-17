@@ -1,0 +1,14 @@
+id = "003_count_todos"
+category = "exploration"
+description = "Count occurrences of TODO markers in comments"
+prompt = "How many TODO markers appear in all Python files under this project? Answer with a single number."
+workspace = "003_count_todos"
+max_turns = 5
+timeout_sec = 120
+
+[[scorers]]
+type = "answer_matches"
+pattern = "\\b7\\b"
+
+[[scorers]]
+type = "no_file_modified"

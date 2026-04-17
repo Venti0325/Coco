@@ -11,7 +11,7 @@
 
 ## 2026-04-16
 
-- **(planned)** Eval harness：`benchmarks/` 目录 + 20 个种子任务 + 可组合 scorer + markdown 报告。用于量化其他三项改动的收益。**优先实施**，因为 baseline 数字是后续所有改动的对照组 → [sessions/2026-04-16-eval-harness.md](sessions/2026-04-16-eval-harness.md)
+- **(done)** Eval harness：`benchmarks/` 目录（`harness.py`/`scorers.py`/`report.py`/`run.py`）+ 20 个种子任务（exploration/single-edit/multi-file/debug/build 五类）+ 10 种可组合 scorer（answer_contains / answer_matches / file_contains / file_equals / file_exists / no_file_modified / command_succeeds / grep_regex / python_assert / turns_under）+ 按时间戳落 markdown 报告。CLI：`python -m benchmarks.run` 或 `coco-bench`。Baseline 数字待用户配置 API key 后跑一次 → [sessions/2026-04-16-eval-harness.md](sessions/2026-04-16-eval-harness.md)
 - **(planned)** 并行工具调用：`ToolSpec.is_concurrency_safe`（默认跟随 `is_read_only`）+ engine 按并发安全性分批 + `ThreadPoolExecutor` 并行执行 + 结果保序；`COCO_MAX_TOOL_CONCURRENCY` 可配（默认 10）→ [sessions/2026-04-16-parallel-tools.md](sessions/2026-04-16-parallel-tools.md)
 - **(planned)** Context engineering：真实 token 追踪 + REPL 水位显示；`context_window.py` 按模型推断窗口；`microcompact.py` 选择性裁剪早期工具结果（Read/Grep/Glob/Shell）为占位符；三级 auto-compact（70% micro / 85% full）→ [sessions/2026-04-16-context-engineering.md](sessions/2026-04-16-context-engineering.md)
 - **(planned)** MCP 协议（MVP）：基于官方 `mcp` Python SDK + async→sync 桥 + 多 server 懒启动管理 + `MCPTool` adapter 走 `mcp__<server>__<tool>` 命名空间 + `.coco/mcp_servers.toml` 配置 + `/mcp` 状态命令 → [sessions/2026-04-16-mcp.md](sessions/2026-04-16-mcp.md)

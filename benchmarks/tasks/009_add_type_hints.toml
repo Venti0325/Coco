@@ -1,0 +1,19 @@
+id = "009_add_type_hints"
+category = "single-edit"
+description = "Add int type annotations to multiply function"
+prompt = "In `src/math_ops.py`, add type annotations to the `multiply` function: both parameters are integers and it returns an integer. Leave the body alone."
+workspace = "009_add_type_hints"
+max_turns = 5
+timeout_sec = 120
+
+[[scorers]]
+type = "grep_regex"
+pattern = "def multiply\\([^)]*:\\s*int[^)]*\\)\\s*->\\s*int:"
+path = "src/math_ops.py"
+glob = "*.py"
+min_matches = 1
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -c 'from src.math_ops import multiply; assert multiply(3,4)==12'"
+timeout = 30

@@ -1,0 +1,15 @@
+id = "001_find_function"
+category = "exploration"
+description = "Locate a specific function and report its file path"
+prompt = "Which file in this project defines the function named `compute_tax`? Answer with just the relative file path, e.g. `src/foo/bar.py`."
+workspace = "001_find_function"
+max_turns = 5
+timeout_sec = 120
+
+[[scorers]]
+type = "answer_contains"
+value = "src/billing/tax.py"
+
+[[scorers]]
+type = "no_file_modified"
+

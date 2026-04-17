@@ -1,0 +1,14 @@
+id = "005_biggest_class"
+category = "exploration"
+description = "Find the class with the most methods"
+prompt = "Which class in this project has the greatest number of methods defined on it? Answer with the class name only."
+workspace = "005_biggest_class"
+max_turns = 6
+timeout_sec = 120
+
+[[scorers]]
+type = "answer_contains"
+value = "BigProcessor"
+
+[[scorers]]
+type = "no_file_modified"

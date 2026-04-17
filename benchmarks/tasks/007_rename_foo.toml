@@ -1,0 +1,22 @@
+id = "007_rename_foo"
+category = "single-edit"
+description = "Rename `foo` to `bar` inside a single file"
+prompt = "In `src/single.py`, rename the function `foo` (and every use of it inside that same file) to `bar`. Do not touch any other file."
+workspace = "007_rename_foo"
+max_turns = 6
+timeout_sec = 180
+
+[[scorers]]
+type = "grep_regex"
+pattern = "def bar\\("
+path = "src/single.py"
+glob = "*.py"
+min_matches = 1
+
+[[scorers]]
+type = "grep_regex"
+pattern = "\\bfoo\\b"
+path = "src/single.py"
+glob = "*.py"
+min_matches = 0
+max_matches = 0
