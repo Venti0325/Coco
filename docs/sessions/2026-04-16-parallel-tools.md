@@ -356,7 +356,36 @@ baseline 报告里每个任务都有 `wall_clock_sec`，对比两次报告得出
 - **线程安全审视**：`PermissionChecker` 在 `_execute_one_tool` 里只会对非只读工具触发 `check`，而非只读工具永远走 `_run_batch_serial`（`len(batch)==1`），天然单线程。`PermissionChecker._always_allow` 只在串行路径写入，不存在并发竞争。`tool_log` 列表 append 也在主线程，无需加锁。
 - **保序实现**：用 `id(tb)` 作为字典 key 而非 index，避免在闭包里误捕获循环变量；`future_to_tb` 映射 Future→原 tool_block，确保异常分支也能取到正确的 `tid`。
 - **ThreadPool 开销**：每次并发批都 `with ThreadPoolExecutor(...) as pool`，函数退出时 `shutdown(wait=True)`。对于单次 4~10 个调用的典型场景，创建开销在几十微秒量级，相对工具本身毫秒级 I/O 可忽略。
-- **Benchmark 对比待 eval harness 落地后再跑**：计划里承诺"Exploration 类 ≥ 50%、总体 ≥ 30%"的墙钟时间下降，需依赖第 1 步 eval harness 的 baseline 数字。本改动落地后即可对照运行，但该数据暂缺，留给后续 session 补齐。
+### Benchmark 对比（2026-04-17，eval harness 落地后跑）
+
+跑 `benchmarks/tasks/001-005`（exploration 类），`openrouter / anthropic/claude-sonnet-4-5`：
+
+| Task | Serial (`MAX_TOOL_CONCURRENCY=1`) | Parallel (默认 10) | Δ wall | Δ tools | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| 001_find_function | 2t · 7.6s | 2t · 4.8s | −37% | 0 batch (单工具) | LLM 随机性 |
+| **002_large_files** | **4t · 15.5s · 1×6-Read batch** | **4t · 12.7s · 1×6-Read batch** | **−18%** | 对照组一致 | **唯一完全可比项** |
+| 003_count_todos | 5t · 15.8s · 1×4-Read batch | 3t · 6.8s · 0 batch | −57% | LLM 用了更少工具 | 不可比 |
+| 004_unused_module | 7t · 25.4s · 1×3-Read batch | 8t · 25.1s · 1×6-Read batch | −1% | LLM 多用了 4 工具 | 不可比 |
+| 005_biggest_class | 3t · 8.6s · 1×3-Read batch | 3t · 9.3s | +8% | LLM 少用 1 工具 | 不可比 |
+| **合计** | **72.9s** | **58.7s** | **−19%** | | |
+
+**头条数字**：**任务 002（8 个工具、1 个 6-Read 并行批，两次跑完全相同路径）墙钟从 15.5s 降到 12.7s，−18%**。
+
+**为什么没达到 plan 里承诺的 ≥50%**：
+1. 本地 workspace 任务太小——每个 Read < 100 ms，6 个 Read 串行 ~0.5-1 s；并行只省 ~0.5 s
+2. 墙钟的**大头是 LLM inference 延迟**（每轮 ~3-5 s），工具执行只占 10-15%
+3. 并行收益上限 = 工具执行占比，本场景下就是 10-15%
+
+**真实仓库**里（大文件 Read 秒级、Grep 跨几百 MB），可分配并行的那一轮墙钟会从 "6×N s 串行" 降到 "max(N) s 并行"，收益比例会大得多。
+
+### 已知 benchmark 限制
+
+这次跑 OpenRouter/Claude Sonnet 4.5 暴露出两个 harness 遗留问题：
+
+1. **`[batch]` 不进报告**：`engine.tool_log` 里加的 `[batch] N tools ran concurrently in …ms` 行只在内存 tool_log 里，`session_store.save_transcript()` 只持久化 messages，benchmark 从 session 重建工具日志时拿不到。**验证并行路径实际触发**需要 `grep assistant turn 的 tool_use 块数量`（见上表 "batches" 列，用 Python 直接读 JSONL 算出）
+2. **tokens/cost 显示 0**：session JSONL 不保存 `EngineResult.usage`。Benchmark 报告的 tokens/cost 字段暂时没意义
+
+两个问题都留给 **context engineering plan** 去修——它本来就会把 `TokenUsage` 接到 `ReplState.session_usage`，顺手把 usage 写进 session meta 就能让 harness 读到真实 token 数。`[batch]` 可视化可以让 harness 从 assistant 消息结构推断（多工具 turn + 只读工具 = 发生了并行）。
 
 ### Commits
 
