@@ -378,14 +378,54 @@ baseline 报告里每个任务都有 `wall_clock_sec`，对比两次报告得出
 
 **真实仓库**里（大文件 Read 秒级、Grep 跨几百 MB），可分配并行的那一轮墙钟会从 "6×N s 串行" 降到 "max(N) s 并行"，收益比例会大得多。
 
-### 已知 benchmark 限制
+### 修正（2026-04-17 下午：加 `tool_time_ms` 指标 + 换 GLM 5.1 重跑）
 
-这次跑 OpenRouter/Claude Sonnet 4.5 暴露出两个 harness 遗留问题：
+上面那张 "002 墙钟 −18%" 的表**不可信**。加了干净指标之后结论大幅改变：
 
-1. **`[batch]` 不进报告**：`engine.tool_log` 里加的 `[batch] N tools ran concurrently in …ms` 行只在内存 tool_log 里，`session_store.save_transcript()` 只持久化 messages，benchmark 从 session 重建工具日志时拿不到。**验证并行路径实际触发**需要 `grep assistant turn 的 tool_use 块数量`（见上表 "batches" 列，用 Python 直接读 JSONL 算出）
-2. **tokens/cost 显示 0**：session JSONL 不保存 `EngineResult.usage`。Benchmark 报告的 tokens/cost 字段暂时没意义
+第一轮用的是 Claude Sonnet，每轮 LLM 推理 3-5 s，4 轮抖动就能吃掉 5-10 s 的"并行收益"。加 `tool_time_ms` 指标（见 commit `4dbefb6`）后换 GLM 5.1 重跑：
 
-两个问题都留给 **context engineering plan** 去修——它本来就会把 `TokenUsage` 接到 `ReplState.session_usage`，顺手把 usage 写进 session meta 就能让 harness 读到真实 token 数。`[batch]` 可视化可以让 harness 从 assistant 消息结构推断（多工具 turn + 只读工具 = 发生了并行）。
+| Task | serial wall / tool | parallel wall / tool | Δ wall | Δ tool |
+| --- | --- | --- | --- | --- |
+| 001 | 2.2s / 0.01s | 2.5s / 0.01s | +14% | 0 |
+| 002 | 6.8s / 0.00s | 11.1s / 0.00s | +63% | 0 |
+| 003 | 3.5s / 0.01s | 3.3s / 0.01s | −6% | 0 |
+| 004 | 7.1s / 0.01s | 10.5s / 0.01s | +48% | 0 |
+| 005 | 6.8s / 0.00s | 3.2s / 0.00s | −53% | 0 |
+| 平均 | 5.3s / 0.01s | 6.1s / 0.01s | +15% | 0 |
+
+干净的结论：
+
+- **`tool_time` 所有任务都 ~0.01s 且串并行无差**——并行路径真的跑了（`_run_batch_parallel` 确认被调用，`[batch]` 日志也在内存 tool_log 里），但本地 workspace 的 Read/Glob/Grep 每个只要毫秒，6 个串行和并行差几毫秒，远低于测量底噪
+- **墙钟 ±50% 的摆动**完全可以用 LLM 推理延迟抖动解释（N=1 样本下模型本身就有这个波动）
+- 同一指标下 **MCP benchmark 的 tool_time 也是 0.01s**（`2026-04-17-070113-glm-mcp.md`），说明当 MCP server 已启动时，stdio JSON-RPC 本身也是毫秒级
+
+### 价值定位修正
+
+原 plan 写的"≥50% 墙钟下降"过于乐观。正确定位：
+
+- **正确性**：单元测试 9 个全通；分批/保序/异常隔离/并发上限等不变量都工作正常
+- **收益出现条件**：真实仓库大文件 Read（秒级）、慢 Grep（跨百 MB ripgrep）、网络工具——单 tool elapsed 秒级时才能在 tool_time 上看到可测改善
+- **本 session 种子任务的工具执行占墙钟 < 0.2%**，再怎么并行也是噪声
+
+各场景的 benchmark 可测性矩阵：
+
+| 场景 | 单 tool 典型 elapsed | 并行收益可测性 |
+| --- | --- | --- |
+| 当前种子任务（5 文件 <500 LOC） | ~1 ms | ❌ 低于底噪 |
+| 中型仓库（1K 文件 / MB 级单文件） | 10-100 ms | ⚠️ 弱信号 |
+| 大型仓库（10K+ 文件 / GB 级） | 100 ms-秒级 | ✅ |
+| 网络工具（WebFetch / 远程 MCP） | 秒级 | ✅ |
+
+要证明并行收益的下一步工作：新增若干"**真实规模**"任务（比如带 10 MB 文件的 workspace，或让 Shell 跑真实的 ripgrep 全库扫描），而不是当前 <500 LOC 的玩具 workspace。
+
+### Harness 侧的顺带改进
+
+两项改动（一次 commit）：
+
+1. **`tool_time_ms` 指标贯通**：engine 累加（串行=sum elapsed，并行=batch wall 反映真实占用）→ `SessionMeta.tool_time_ms` → harness 读 `.meta.json` → `TaskRun.tool_time_sec` → 报告多一列
+2. **Token 数终于正确显示**：`SessionMeta` 加 `tokens_in/tokens_out`，harness 优先从 meta.json 读。原先 session JSONL 不含 usage，benchmark 报告 tokens=0 的问题解决
+
+落地于 commit `4dbefb6 feat:tool_time_ms纯工具时间指标(engine→session→harness→report贯通)`。
 
 ### Commits
 
