@@ -68,6 +68,7 @@ class TaskRun:
     success: bool
     turns: int
     wall_clock_sec: float
+    tool_time_sec: float  # 纯工具执行时间（串行累加 + 并行按批次 wall）
     tokens_in: int
     tokens_out: int
     cost_usd: float
@@ -192,6 +193,29 @@ def _sum_usage(messages: list[dict[str, Any]]) -> tuple[int, int]:
     return ti, to
 
 
+def _latest_session_meta(workspace: Path) -> dict[str, Any]:
+    """从 Coco XDG 数据目录读最新 session 的 ``.meta.json``（供 tool_time / tokens 使用）。
+
+    找不到或解析失败时返回空 dict。
+    """
+
+    try:
+        from core.paths import sessions_dir  # type: ignore
+    except Exception:
+        return {}
+
+    sess_dir = sessions_dir(workspace)
+    if not sess_dir.is_dir():
+        return {}
+    metas = sorted(sess_dir.glob("*.meta.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not metas:
+        return {}
+    try:
+        return json.loads(metas[0].read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def _latest_session_messages(workspace: Path) -> list[dict[str, Any]]:
     """从 Coco XDG 数据目录读最新的 session JSONL。
 
@@ -295,6 +319,7 @@ def run_task(
             success=False,
             turns=0,
             wall_clock_sec=0.0,
+            tool_time_sec=0.0,
             tokens_in=0,
             tokens_out=0,
             cost_usd=0.0,
@@ -344,8 +369,12 @@ def run_task(
         wall = time.monotonic() - start
 
         session_msgs = _latest_session_messages(ws)
+        session_meta = _latest_session_meta(ws)
         turns = _count_assistant_turns(session_msgs)
-        tokens_in, tokens_out = _sum_usage(session_msgs)
+        # Prefer meta.json values (engine-authoritative); fall back to in-message usage
+        tokens_in = int(session_meta.get("tokens_in", 0)) or _sum_usage(session_msgs)[0]
+        tokens_out = int(session_meta.get("tokens_out", 0)) or _sum_usage(session_msgs)[1]
+        tool_time_sec = float(session_meta.get("tool_time_ms", 0.0)) / 1000.0
 
         tool_log = _extract_tool_log(session_msgs)
 
@@ -379,6 +408,7 @@ def run_task(
             success=success,
             turns=turns,
             wall_clock_sec=wall,
+            tool_time_sec=tool_time_sec,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             cost_usd=0.0,

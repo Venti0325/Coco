@@ -416,7 +416,13 @@ def entry() -> None:
             console.print()
 
         if session_store is not None:
-            session_store.save_transcript(result.messages)
+            usage = result.usage
+            session_store.save_transcript(
+                result.messages,
+                tool_time_ms=result.tool_time_ms,
+                tokens_in=usage.input_tokens if usage else 0,
+                tokens_out=usage.output_tokens if usage else 0,
+            )
         chat_messages.clear()
         chat_messages.extend(result.messages)
         return True

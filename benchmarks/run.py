@@ -147,7 +147,8 @@ def main(argv: list[str] | None = None) -> int:
             extra = f" err={r.error}" if r.error else ""
             print(
                 f"[coco-bench] [{task.id}] {mark} "
-                f"turns={r.turns} wall={r.wall_clock_sec:.1f}s{extra}"
+                f"turns={r.turns} wall={r.wall_clock_sec:.1f}s "
+                f"tool={r.tool_time_sec:.2f}s{extra}"
             )
             runs.append(r)
 

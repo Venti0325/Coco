@@ -21,6 +21,11 @@ class SessionMeta:
     created_at: str
     updated_at: str
     message_count: int = 0
+    # 纯工具执行时间累计（毫秒），并行批次按批次 wall 记；默认 0 用于兼容旧会话
+    tool_time_ms: float = 0.0
+    # token 用量（累计），部分网关不返回时保持 0
+    tokens_in: int = 0
+    tokens_out: int = 0
 
 
 def _now_iso() -> str:
@@ -118,8 +123,19 @@ class SessionStore:
             out.append(obj)
         return out
 
-    def save_transcript(self, messages: list[dict[str, Any]]) -> None:
-        """用完整消息列表覆盖写入 JSONL，并更新 meta。"""
+    def save_transcript(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tool_time_ms: float = 0.0,
+        tokens_in: int = 0,
+        tokens_out: int = 0,
+    ) -> None:
+        """用完整消息列表覆盖写入 JSONL，并更新 meta。
+
+        可选传入累计 tool_time_ms / token 数，写入 meta.json 供外部工具
+        （benchmark harness 等）读取；不改变 messages 本身的形状。
+        """
         ensure_dir(self._dir)
         now = _now_iso()
         lines: list[str] = []
@@ -141,6 +157,9 @@ class SessionStore:
             created_at=self._created_at,
             updated_at=now,
             message_count=len(messages),
+            tool_time_ms=float(tool_time_ms),
+            tokens_in=int(tokens_in),
+            tokens_out=int(tokens_out),
         )
         self._meta_path.write_text(
             json.dumps(asdict(meta), ensure_ascii=False, indent=2),

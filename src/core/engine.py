@@ -62,6 +62,9 @@ class EngineResult:
     tool_log: list[str] = field(default_factory=list)
     usage: TokenUsage | None = None
     messages: list[dict] = field(default_factory=list)
+    # 纯工具执行时间：串行批次累加每个工具 elapsed；并行批次累加批次 wall。
+    # 不受 LLM 推理延迟影响，是衡量并行工具收益的干净指标。
+    tool_time_ms: float = 0.0
 
 
 def _anthropic_tool_defs(tools: Sequence[Tool]) -> list[dict]:
@@ -319,11 +322,13 @@ class Engine:
         result_blocks: list[dict | None],
         tool_log: list[str],
         on_tool_call: Callable[[str, dict], None] | None,
-    ) -> None:
+    ) -> float:
         """串行执行一批工具调用（用于单工具或非并发安全工具）。
 
         日志与回调在执行前按输入顺序触发，保留当前交互式 UI 体验。
+        返回本批次累加的 tool time（毫秒），供 ``_run_tool_loop`` 汇总。
         """
+        batch_time_ms = 0.0
         for tb in batch:
             name = str(tb.get("name", ""))
             raw_in = tb.get("input")
@@ -337,6 +342,7 @@ class Engine:
                 self._permissions,
                 self._path_allowed_for_tool,
             )
+            batch_time_ms += elapsed_ms
             tool_log.append(_tool_line(name, inp, elapsed_ms))
             idx = index_by_id[id(tb)]
             result_blocks[idx] = {
@@ -344,6 +350,7 @@ class Engine:
                 "tool_use_id": tid,
                 "content": body,
             }
+        return batch_time_ms
 
     def _run_batch_parallel(
         self,
@@ -352,7 +359,7 @@ class Engine:
         result_blocks: list[dict | None],
         tool_log: list[str],
         on_tool_call: Callable[[str, dict], None] | None,
-    ) -> None:
+    ) -> float:
         """并发执行一批只读工具调用。
 
         - ThreadPoolExecutor 按 ``min(len(batch), max_tool_concurrency)`` 开 worker
@@ -414,6 +421,9 @@ class Engine:
             f"[batch] {len(batch)} tools ran concurrently in "
             f"{batch_elapsed_ms:.0f}ms (max individual: {max_individual_ms:.0f}ms)"
         )
+        # 并行批次的 tool time 按批次 wall 计（而非 sum of elapsed），
+        # 这才反映"占用调用方多少时间"——也是并行优化真正要对照的量
+        return batch_elapsed_ms
 
     def _run_tool_loop(
         self,
@@ -428,6 +438,7 @@ class Engine:
         ]
         tool_log: list[str] = []
         usage_acc: TokenUsage | None = None
+        tool_time_ms_acc: float = 0.0
         max_steps = self._max_steps_for_turn(user_text)
 
         for _ in range(max_steps):
@@ -456,6 +467,7 @@ class Engine:
                     tool_log=tool_log,
                     usage=usage_acc,
                     messages=messages,
+                    tool_time_ms=tool_time_ms_acc,
                 )
 
             messages.append({"role": "assistant", "content": blocks})
@@ -468,7 +480,7 @@ class Engine:
 
             for is_safe, batch in batches:
                 if is_safe and len(batch) > 1:
-                    self._run_batch_parallel(
+                    tool_time_ms_acc += self._run_batch_parallel(
                         batch,
                         index_by_id,
                         result_blocks,
@@ -477,7 +489,7 @@ class Engine:
                     )
                 else:
                     # 单个工具 or 非并发安全工具 → 串行路径
-                    self._run_batch_serial(
+                    tool_time_ms_acc += self._run_batch_serial(
                         batch,
                         index_by_id,
                         result_blocks,
@@ -499,4 +511,5 @@ class Engine:
             tool_log=tool_log,
             usage=usage_acc,
             messages=messages,
+            tool_time_ms=tool_time_ms_acc,
         )

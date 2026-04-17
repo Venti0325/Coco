@@ -49,6 +49,7 @@ def _summary_table(runs: list[TaskRun]) -> str:
     avg_in = _safe_mean(r.tokens_in for r in runs)
     avg_out = _safe_mean(r.tokens_out for r in runs)
     avg_wall = _safe_mean(r.wall_clock_sec for r in runs)
+    avg_tool = _safe_mean(r.tool_time_sec for r in runs)
     avg_cost = _safe_mean(r.cost_usd for r in runs)
 
     rate = f"{passed}/{total} ({(passed/total*100):.0f}%)" if total else "0/0"
@@ -60,6 +61,7 @@ def _summary_table(runs: list[TaskRun]) -> str:
         f"| Avg turns | {avg_turns:.1f} |\n"
         f"| Avg tokens (in / out) | {avg_in:,.0f} / {avg_out:,.0f} |\n"
         f"| Avg wall clock | {avg_wall:.1f}s |\n"
+        f"| Avg tool time | {avg_tool:.2f}s |\n"
         f"| Avg cost | ${avg_cost:.3f} |\n"
     )
 
@@ -85,7 +87,8 @@ def _task_section(r: TaskRun) -> str:
     status = "pass" if r.success else "fail"
     head = (
         f"### {mark} {r.task_id} — {status} "
-        f"({r.turns} turns, {r.tokens_in + r.tokens_out:,} tok, {r.wall_clock_sec:.1f}s)"
+        f"({r.turns} turns, {r.tokens_in + r.tokens_out:,} tok, "
+        f"wall {r.wall_clock_sec:.1f}s, tool {r.tool_time_sec:.2f}s)"
     )
     body_lines = [head, ""]
 
@@ -220,6 +223,7 @@ def summary_for_stdout(runs: list[TaskRun]) -> str:
         mark = "PASS" if r.success else "FAIL"
         err = f" [{r.error}]" if r.error else ""
         lines.append(
-            f"  {mark:4}  {r.task_id}  {r.turns}t  {r.wall_clock_sec:5.1f}s{err}"
+            f"  {mark:4}  {r.task_id}  {r.turns}t  "
+            f"wall={r.wall_clock_sec:5.1f}s  tool={r.tool_time_sec:4.2f}s{err}"
         )
     return "\n".join(lines)

@@ -353,6 +353,7 @@ def _sample_run(success: bool = True, task_id: str = "001") -> TaskRun:
         success=success,
         turns=2,
         wall_clock_sec=1.2,
+        tool_time_sec=0.3,
         tokens_in=100,
         tokens_out=50,
         cost_usd=0.01,
