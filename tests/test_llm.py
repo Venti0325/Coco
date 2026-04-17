@@ -1,12 +1,15 @@
-"""OpenAI 兼容消息转换"""
+"""OpenAI 兼容消息转换 + OpenRouter 接入测试"""
 
 from __future__ import annotations
 
 from core.llm import (
+    LLMClient,
+    _build_openai_chat_request,
     _openai_supports_reasoning_effort,
     _tool_schema_to_openai,
     _to_openai_messages,
 )
+from core.models import AppSettings, Provider
 
 
 def test_to_openai_messages_tool_roundtrip():
@@ -88,3 +91,116 @@ def test_openai_reasoning_effort_flag():
     assert _openai_supports_reasoning_effort("o1-mini") is True
     assert _openai_supports_reasoning_effort("gpt-4.1-mini") is False
     assert _openai_supports_reasoning_effort("qwen-plus") is False
+
+
+# ── OpenRouter 接入测试 ──────────────────────────────────────────────────
+
+
+def test_reasoning_effort_namespaced_slugs():
+    """命名空间 slug（如 openai/gpt-5）也应被识别。"""
+    assert _openai_supports_reasoning_effort("openai/gpt-5") is True
+    assert _openai_supports_reasoning_effort("openai/o3-mini") is True
+    assert _openai_supports_reasoning_effort("openai/o4-mini") is True
+    assert _openai_supports_reasoning_effort("anthropic/claude-sonnet-4-5") is False
+    assert _openai_supports_reasoning_effort("google/gemini-2.5-pro") is False
+
+
+def test_build_openai_chat_request_extra_body_provider():
+    """extra_body_provider 应注入到 params["extra_body"]["provider"]，不是顶层。"""
+    provider_cfg = {"require_parameters": True, "sort": "throughput"}
+    params = _build_openai_chat_request(
+        model="anthropic/claude-sonnet-4-5",
+        max_tokens=8192,
+        system=None,
+        messages=[],
+        tools=[],
+        effort=None,
+        stream=True,
+        extra_body_provider=provider_cfg,
+    )
+    assert "provider" not in params, "provider 不应在顶层"
+    assert params["extra_body"]["provider"] == provider_cfg
+
+
+def test_build_openai_chat_request_fallback_models():
+    """fallback_models 非空时应生成 extra_body["models"] 数组。"""
+    params = _build_openai_chat_request(
+        model="anthropic/claude-sonnet-4-5",
+        max_tokens=8192,
+        system=None,
+        messages=[],
+        tools=[],
+        effort=None,
+        stream=True,
+        fallback_models=("openai/gpt-5", "google/gemini-2.5-pro"),
+    )
+    assert params["extra_body"]["models"] == [
+        "anthropic/claude-sonnet-4-5",
+        "openai/gpt-5",
+        "google/gemini-2.5-pro",
+    ]
+
+
+def test_build_openai_chat_request_no_extra_body_when_empty():
+    """两个参数都为空时不应写入 extra_body key。"""
+    params = _build_openai_chat_request(
+        model="gpt-5",
+        max_tokens=8192,
+        system=None,
+        messages=[],
+        tools=[],
+        effort=None,
+        stream=True,
+    )
+    assert "extra_body" not in params
+
+
+def test_from_settings_openrouter_has_extras():
+    """Provider.OPENROUTER 路径应注入 OpenRouter 默认配置。"""
+    settings = AppSettings(
+        provider=Provider.OPENROUTER,
+        model="anthropic/claude-sonnet-4-5",
+        api_key="sk-or-test",
+    )
+    client = LLMClient.from_settings(settings)
+    backend = client._backend
+    assert backend._extra_body_provider is not None
+    assert backend._extra_body_provider["require_parameters"] is True
+    assert backend._pass_fallback_models is True
+
+
+def test_from_settings_openai_has_no_extras():
+    """Provider.OPENAI 路径不应注入 OpenRouter extras（隔离回归）。"""
+    settings = AppSettings(
+        provider=Provider.OPENAI,
+        model="gpt-5",
+        api_key="sk-test",
+    )
+    client = LLMClient.from_settings(settings)
+    backend = client._backend
+    assert backend._extra_body_provider is None
+    assert backend._pass_fallback_models is False
+
+
+def test_from_settings_openrouter_default_base_url():
+    """OpenRouter 路径在 base_url 为空时应自动填入默认 URL。"""
+    settings = AppSettings(
+        provider=Provider.OPENROUTER,
+        model="anthropic/claude-sonnet-4-5",
+        api_key="sk-or-test",
+        base_url=None,
+    )
+    client = LLMClient.from_settings(settings)
+    assert client._settings.base_url == "https://openrouter.ai/api/v1"
+
+
+def test_from_settings_openrouter_custom_base_url_preserved():
+    """OpenRouter 路径在 base_url 非空时不应覆盖。"""
+    settings = AppSettings(
+        provider=Provider.OPENROUTER,
+        model="anthropic/claude-sonnet-4-5",
+        api_key="sk-or-test",
+        base_url="https://my-proxy.example.com/v1",
+    )
+    client = LLMClient.from_settings(settings)
+    assert client._settings.base_url == "https://my-proxy.example.com/v1"

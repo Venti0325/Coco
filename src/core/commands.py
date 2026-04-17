@@ -475,7 +475,7 @@ def _cmd_doctor(ctx: CommandContext, args: str) -> None:
         masked = key[:8] + "…" + key[-4:]
         log.info(f"  {ok} API 密钥已配置  ({ctx.settings.provider.value}: {masked})")
     else:
-        log.info(f"  {fail} API 密钥未配置  — 请设置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY")
+        log.info(f"  {fail} API 密钥未配置  — 请设置 ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY")
 
     # 3. 模型
     if ctx.settings.model:

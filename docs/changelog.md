@@ -27,6 +27,6 @@
 
 ## 2026-04-08
 
-- **(planned)** OpenRouter 接入（一等公民 provider 支持）→ [sessions/2026-04-08.md](sessions/2026-04-08.md)
+- **(in progress)** OpenRouter 接入 Step 1+2：`_OpenAIBackend` 接受 `default_headers`/`extra_body_provider`/`pass_fallback_models` 注入；`from_settings` OPENROUTER 分支默认走 `require_parameters:true` + `sort:throughput` + attribution headers；命名空间 slug 的 `reasoning_effort` 前缀检查修复；CLI choices 与 `/doctor` 提示更新。Step 3+4（动态模型表 + fallback_models）待做 → [sessions/2026-04-08.md](sessions/2026-04-08.md)
 - **(done)** 建立 `docs/` 文档流程：`changelog.md` + 每日 `sessions/<日期>.md`（plan / summary 两段式）；`CLAUDE.md` 增加 workflow 一节
 - **(done)** 初始化 `CLAUDE.md`，覆盖架构关键缝、命令、测试模式与 Windows-first 注意事项

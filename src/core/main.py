@@ -157,7 +157,7 @@ def _print_startup(workspace: Path, settings: AppSettings) -> None:
             log.dim(f"  Effort     : {settings.effort}")
     else:
         log.warn(
-            "  API 密钥未配置：请设置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY，"
+            "  API 密钥未配置：请设置 ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY，"
             "或写入 .env / 用户目录配置文件 / 项目 .coco.toml"
         )
         log.dim("  Provider   : 未配置")
@@ -193,7 +193,7 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="一次性提示词（跳过交互模式）")
     p.add_argument("-p", "--print", action="store_true", dest="print_mode",
                    help="输出原始响应后直接退出")
-    p.add_argument("--provider", choices=("anthropic", "openai"),
+    p.add_argument("--provider", choices=("anthropic", "openai", "openrouter"),
                    help="LLM 后端供应商")
     p.add_argument("--model", help="模型名称或别名")
     p.add_argument("--api-key", help="API 密钥（覆盖配置文件 / 环境变量）")

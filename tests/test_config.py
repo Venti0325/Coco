@@ -27,6 +27,8 @@ def _clear_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "ANTHROPIC_BASE_URL",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_BASE_URL",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -163,3 +165,31 @@ def test_load_settings_openai_env(
     assert s.api_key == "env-openai-key"
     assert s.base_url == "https://dashscope.test"
     assert s.model == "qwen-plus"
+
+
+def test_load_settings_openrouter_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_args: Namespace,
+):
+    """OPENROUTER_API_KEY + COCO_PROVIDER=openrouter 正确组装 AppSettings。"""
+    _clear_config_env(monkeypatch)
+    monkeypatch.setattr(
+        "core.config.user_config_file",
+        lambda: tmp_path / "missing.toml",
+    )
+    monkeypatch.setenv("COCO_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-key")
+    monkeypatch.setenv("COCO_MODEL", "anthropic/claude-sonnet-4-5")
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.provider == Provider.OPENROUTER
+    assert s.api_key == "sk-or-test-key"
+    assert s.model == "anthropic/claude-sonnet-4-5"
+    assert s.max_tokens == 32_000  # 命中 _MAX_TOKENS_TABLE 的 "anthropic/claude-sonnet-4" 前缀
+
+
+def test_argparse_accepts_openrouter():
+    """--provider openrouter 不被 argparse 拒绝。"""
+    from core.main import _build_parser
+    args = _build_parser().parse_args(["--provider", "openrouter"])
+    assert args.provider == "openrouter"

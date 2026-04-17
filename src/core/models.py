@@ -22,6 +22,7 @@ class Provider(str, Enum):
     """支持的 LLM API 供应商。"""
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
+    OPENROUTER = "openrouter"
 
     @classmethod
     def from_str(cls, value: str) -> "Provider":

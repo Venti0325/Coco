@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterator
 
 import anthropic
@@ -211,17 +211,30 @@ class _OpenAIStream:
 
 
 class _OpenAIBackend:
-    """OpenAI 兼容 API 后端（适用于 OpenAI、DashScope 等）。"""
+    """OpenAI 兼容 API 后端（适用于 OpenAI、DashScope、OpenRouter 等）。"""
 
-    def __init__(self, settings: AppSettings):
+    def __init__(
+        self,
+        settings: AppSettings,
+        *,
+        default_headers: dict[str, str] | None = None,
+        extra_body_provider: dict[str, Any] | None = None,
+        pass_fallback_models: bool = False,
+    ):
         if _OpenAI is None:
             raise RuntimeError(
                 "OpenAI 后端需要安装 openai 包: pip install openai"
             )
-        self._client = _OpenAI(
-            api_key=settings.api_key,
-            base_url=settings.base_url,
-        )
+        self._settings = settings
+        self._extra_body_provider = extra_body_provider
+        self._pass_fallback_models = pass_fallback_models
+        client_kwargs: dict[str, Any] = {
+            "api_key": settings.api_key,
+            "base_url": settings.base_url,
+        }
+        if default_headers:
+            client_kwargs["default_headers"] = default_headers
+        self._client = _OpenAI(**client_kwargs)
 
     def stream(
         self, *, model: str, max_tokens: int,
@@ -229,6 +242,11 @@ class _OpenAIBackend:
         tools: list[dict] | None = None,
         effort: str | None = None, **_kw,
     ) -> _OpenAIStream:
+        fallback = (
+            getattr(self._settings, "fallback_models", ())
+            if self._pass_fallback_models
+            else ()
+        )
         params = _build_openai_chat_request(
             model=model,
             max_tokens=max_tokens,
@@ -237,6 +255,8 @@ class _OpenAIBackend:
             tools=tools or [],
             effort=effort,
             stream=True,
+            extra_body_provider=self._extra_body_provider,
+            fallback_models=fallback,
         )
         return _OpenAIStream(self._client, params)
 
@@ -301,7 +321,23 @@ class LLMClient:
     @classmethod
     def from_settings(cls, settings: AppSettings) -> "LLMClient":
         """工厂方法：根据 AppSettings.provider 选择后端并创建实例。"""
-        if settings.provider == Provider.OPENAI:
+        if settings.provider == Provider.OPENROUTER:
+            if not settings.base_url:
+                settings = replace(settings, base_url="https://openrouter.ai/api/v1")
+            backend = _OpenAIBackend(
+                settings,
+                default_headers={
+                    "HTTP-Referer": "https://github.com/Venti0325/Coco",
+                    "X-Title": "Coco",
+                },
+                extra_body_provider={
+                    "require_parameters": True,
+                    "sort": "throughput",
+                    "allow_fallbacks": True,
+                },
+                pass_fallback_models=True,
+            )
+        elif settings.provider == Provider.OPENAI:
             backend = _OpenAIBackend(settings)
         else:
             backend = _AnthropicBackend(settings)
@@ -427,7 +463,8 @@ def _extract_openai_usage(raw: Any) -> TokenUsage | None:
 
 def _openai_supports_reasoning_effort(model: str) -> bool:
     m = model.lower()
-    return m.startswith(("gpt-5", "o1", "o3", "o4"))
+    bare = m.split("/")[-1]  # "openai/gpt-5" → "gpt-5"
+    return bare.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
 def _build_openai_chat_request(
@@ -439,6 +476,8 @@ def _build_openai_chat_request(
     tools: list[dict[str, Any]],
     effort: str | None,
     stream: bool,
+    extra_body_provider: dict[str, Any] | None = None,
+    fallback_models: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     params: dict[str, Any] = {
         "model": model,
@@ -450,6 +489,14 @@ def _build_openai_chat_request(
         params["tools"] = [_tool_schema_to_openai(t) for t in tools]
     if effort and _openai_supports_reasoning_effort(model):
         params["reasoning_effort"] = effort
+    # OpenRouter 专有字段：必须走 SDK 的 extra_body 入口
+    extra_body: dict[str, Any] = {}
+    if extra_body_provider:
+        extra_body["provider"] = extra_body_provider
+    if fallback_models:
+        extra_body["models"] = [model, *fallback_models]
+    if extra_body:
+        params["extra_body"] = extra_body
     return params
 
 

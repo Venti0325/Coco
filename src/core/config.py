@@ -53,6 +53,18 @@ _MAX_TOKENS_TABLE: tuple[tuple[str, int], ...] = (
     ("qwen2",               8_192),
     ("qwen-vl",             8_192),
     ("qwen",                8_192),
+    # OpenRouter 命名空间前缀（动态查询上线后仍保留作 fail-open 兜底）
+    ("anthropic/claude-opus-4",     32_000),
+    ("anthropic/claude-sonnet-4",   32_000),
+    ("anthropic/claude-3-5",         8_192),
+    ("openai/gpt-5",                16_384),
+    ("openai/o3",                   16_384),
+    ("openai/o4",                   16_384),
+    ("google/gemini-2.5-pro",        8_192),
+    ("deepseek/deepseek-v3",         8_192),
+    ("deepseek/deepseek-r1",         8_192),
+    ("meta-llama/llama-4",           8_192),
+    ("x-ai/grok-4",                 16_384),
 )
 
 # ── 环境变量 → 配置键映射 ────────────────────────────────────────────
@@ -68,6 +80,8 @@ _ENV_MAP: dict[str, str] = {
     "ANTHROPIC_BASE_URL":     "anthropic_base_url",
     "OPENAI_API_KEY":         "openai_api_key",
     "OPENAI_BASE_URL":        "openai_base_url",
+    "OPENROUTER_API_KEY":     "openrouter_api_key",
+    "OPENROUTER_BASE_URL":    "openrouter_base_url",
 }
 
 
@@ -112,7 +126,7 @@ def _read_toml(path: Path) -> dict:
         if key in data:
             flat[key] = data[key]
     # provider 子表 → 展平为 "<provider>_<key>"
-    for section in ("anthropic", "openai"):
+    for section in ("anthropic", "openai", "openrouter"):
         sub = data.get(section)
         if isinstance(sub, dict):
             for k, v in sub.items():
