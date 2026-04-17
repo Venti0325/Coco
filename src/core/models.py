@@ -22,6 +22,7 @@ class Provider(str, Enum):
     """支持的 LLM API 供应商。"""
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
+    OPENROUTER = "openrouter"
 
     @classmethod
     def from_str(cls, value: str) -> "Provider":
@@ -48,6 +49,9 @@ class AppSettings:
     effort: str | None = None          # low / medium / high（OpenAI 推理力度）
     max_steps: int = 10                # 简单任务工具循环上限
     max_steps_complex: int = 20        # 复杂任务工具循环上限
+    # 仅在 provider=openrouter 时生效。其他 provider 即使设置也会被忽略，
+    # 不会注入请求——详见 llm.py:_OpenAIBackend.pass_fallback_models 开关。
+    fallback_models: tuple[str, ...] = ()
 
 
 # ── Token 用量追踪 ────────────────────────────────────────────────────

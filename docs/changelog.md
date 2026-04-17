@@ -9,9 +9,16 @@
 
 ---
 
+## 2026-04-16
+
+- **(planned)** Eval harness：`benchmarks/` 目录 + 20 个种子任务 + 可组合 scorer + markdown 报告。用于量化其他三项改动的收益。**优先实施**，因为 baseline 数字是后续所有改动的对照组 → [sessions/2026-04-16-eval-harness.md](sessions/2026-04-16-eval-harness.md)
+- **(planned)** 并行工具调用：`ToolSpec.is_concurrency_safe`（默认跟随 `is_read_only`）+ engine 按并发安全性分批 + `ThreadPoolExecutor` 并行执行 + 结果保序；`COCO_MAX_TOOL_CONCURRENCY` 可配（默认 10）→ [sessions/2026-04-16-parallel-tools.md](sessions/2026-04-16-parallel-tools.md)
+- **(planned)** Context engineering：真实 token 追踪 + REPL 水位显示；`context_window.py` 按模型推断窗口；`microcompact.py` 选择性裁剪早期工具结果（Read/Grep/Glob/Shell）为占位符；三级 auto-compact（70% micro / 85% full）→ [sessions/2026-04-16-context-engineering.md](sessions/2026-04-16-context-engineering.md)
+- **(planned)** MCP 协议（MVP）：基于官方 `mcp` Python SDK + async→sync 桥 + 多 server 懒启动管理 + `MCPTool` adapter 走 `mcp__<server>__<tool>` 命名空间 + `.coco/mcp_servers.toml` 配置 + `/mcp` 状态命令 → [sessions/2026-04-16-mcp.md](sessions/2026-04-16-mcp.md)
+
 ## 2026-04-13
 
-- **(done)** skills：补齐 `paths` 约束的运行时 enforcement（Read/Glob/Grep/Write/Edit），并确保 inline/fork 两种执行模式都能透传约束；新增 e2e 回归测试覆盖“越界路径被拦截但主链路仍可继续”
+- **(done)** skills：补齐 `paths` 约束的运行时 enforcement（Read/Glob/Grep/Write/Edit），并确保 inline/fork 两种执行模式都能透传约束；新增 e2e 回归测试覆盖"越界路径被拦截但主链路仍可继续"
 - **(done)** `/skills` 输出增强：从单行列表改为更易读的多行块展示（name + description），新增单测
 - **(done)** 灵动岛：迁入 `core/island.py`（tkinter 悬浮窗，working/done/notify/permission），并在主链路接入 request working 状态、异常 notify、GUI 权限确认（不可用自动回退终端）；退出时 stop
 - **(done)** 文档对齐：README / RELEASE_NOTES / changelog 同步更新，补充灵动岛与 skills 约束能力说明（跨平台说明保持一致）
@@ -27,6 +34,6 @@
 
 ## 2026-04-08
 
-- **(planned)** OpenRouter 接入（一等公民 provider 支持）→ [sessions/2026-04-08.md](sessions/2026-04-08.md)
+- **(done)** OpenRouter 接入完整落地（Step 1-4）：`Provider.OPENROUTER` 枚举；`_OpenAIBackend` 接受 `default_headers`/`extra_body_provider`/`pass_fallback_models` 注入；专有字段走 `params["extra_body"]`；`from_settings` OPENROUTER 分支默认 `require_parameters:true` + `sort:throughput` + attribution headers；命名空间 slug 的 `reasoning_effort` 检查修复；`openrouter_models.py` 懒加载 + 24h 缓存 + 3s 超时 + fail-open，读 `top_provider.max_completion_tokens`（非 `context_length`）；`AppSettings.fallback_models` 字段 + TOML 列表 + `COCO_FALLBACK_MODELS` env（逗号分隔），严格 gate 在 OpenRouter 路径不泄漏；`/model` 命令 OpenRouter 切换时拿动态 `max_tokens`；`.env.example` 补齐。144 tests passed → [sessions/2026-04-08.md](sessions/2026-04-08.md)
 - **(done)** 建立 `docs/` 文档流程：`changelog.md` + 每日 `sessions/<日期>.md`（plan / summary 两段式）；`CLAUDE.md` 增加 workflow 一节
 - **(done)** 初始化 `CLAUDE.md`，覆盖架构关键缝、命令、测试模式与 Windows-first 注意事项

@@ -352,7 +352,7 @@ def _cmd_model(ctx: CommandContext, args: str) -> None:
     # 有参数 → 直接切换
     if args.strip():
         model = args.strip()
-        max_t = _infer_max_tokens(model)
+        max_t = _infer_max_tokens(model, provider=ctx.settings.provider)
         client.set_model(model, max_t)
         log.info(f"已切换模型为 [bold]{model}[/bold]  (max_tokens={max_t:,})")
         return
@@ -446,7 +446,7 @@ def _cmd_model(ctx: CommandContext, args: str) -> None:
         return
 
     model = result[0]
-    max_t = _infer_max_tokens(model)
+    max_t = _infer_max_tokens(model, provider=ctx.settings.provider)
     client.set_model(model, max_t)
     log.info(f"已切换模型为 [bold]{model}[/bold]  (max_tokens={max_t:,})")
 
@@ -475,7 +475,7 @@ def _cmd_doctor(ctx: CommandContext, args: str) -> None:
         masked = key[:8] + "…" + key[-4:]
         log.info(f"  {ok} API 密钥已配置  ({ctx.settings.provider.value}: {masked})")
     else:
-        log.info(f"  {fail} API 密钥未配置  — 请设置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY")
+        log.info(f"  {fail} API 密钥未配置  — 请设置 ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY")
 
     # 3. 模型
     if ctx.settings.model:
