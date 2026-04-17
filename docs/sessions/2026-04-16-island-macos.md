@@ -179,3 +179,26 @@ $ python -c "from core.island import DynamicIsland, _MacOSIslandBackend, _choose
 - 真·macOS 浮动岛（pyobjc + NSWindow）需 `main.py` 主线程让渡给 Tk/Cocoa，REPL 跑后台线程——大重构，不在本 PR 范围。届时 `_MacOSIslandBackend` 可被 `_MacOSNativeIslandBackend` 替换对上游透明
 - Linux Wayland 下 tkinter 的 `_HAS_TK=True` 但可能无 display —— 现有 `_run()` 已有 `try/except` 兜底，本 PR 不碰
 - `COCO_NO_ISLAND` 没在 README / `.env.example` 宣传 —— 后续补
+
+### 2026-04-17 — Review 反馈修复（PR #2 comment）
+
+Review 指出两个真实问题：
+
+1. **非 TTY stdout 污染** —— `_set_term_title` 无条件写 OSC 转义到 `sys.stdout`。macOS backend 在 `main.py` 里无条件启动，`coco > out.txt` / pipe / subprocess 捕获等场景会把 `\033]0;...\007` 混进下游输出
+2. **done 状态从未可见** —— `set_working(False)` 先写 "✓ done" 再立刻覆盖为 "idle"，同一调用内完成，用户看不到 done 状态
+
+**修复**：
+
+- `_MacOSIslandBackend.__init__` 新增 `self._title_enabled = False` 字段；`start()` 调用 `_stdout_is_tty()` 快照结果（快照后即使 stdout 被重定向也不受影响）
+- `_set_term_title` 改为实例方法，首行 `if not self._title_enabled: return` 守护；`_stdout_is_tty()` 是 staticmethod，捕获 `ValueError`/`AttributeError`/`OSError` 对 closed/detached stdout 也安全
+- `set_working(False)` 移除末尾的 `self._set_term_title("Coco · idle")`。done 标题保留到下一次 `set_working(True)`（覆盖为 working…）或 `stop()`（清空）
+- `stop()` 把 `_title_enabled` 也重置为 False，避免重复启停时的悬挂状态
+
+**新增测试**：
+
+- `test_macos_backend_skips_title_write_when_stdout_not_tty` —— `isatty()=False` 时整个生命周期零 write 调用
+- `test_macos_backend_done_state_persists_until_next_working_or_stop` —— `set_working(False)` 后最终标题是 "✓ done"，不是 "idle"；下一次 `set_working(True)` 才覆盖
+
+**测试脚手架调整**：`_fake_tty_stdout(written, *, isatty=True)` helper 给假 stdout 加 `isatty()` 方法；所有原有 title 相关测试改为 start() 前 patch stdout（因为 `_title_enabled` 快照在 start() 时）。
+
+**回归**：`pytest tests/` → **165 passed**（原 163 + 新增 2）。

@@ -617,11 +617,16 @@ class _MacOSIslandBackend:
 
     def __init__(self) -> None:
         self._started = False
+        # 在 start() 时快照 stdout 是否是 TTY——之后 stdout 即使被重定向也不会改结果。
+        # 非 TTY（管道/重定向/benchmark harness subprocess 捕获）下**绝不**写 OSC
+        # 转义序列，否则 `coco > out.txt` 会把 \033]0;...\007 混进文本输出。
+        self._title_enabled = False
 
     def start(self) -> None:
         if self._started:
             return
         self._started = True
+        self._title_enabled = self._stdout_is_tty()
         self._set_term_title("Coco · idle")
 
     def set_working(self, working: bool) -> None:
@@ -630,10 +635,10 @@ class _MacOSIslandBackend:
         if working:
             self._set_term_title("Coco · working…")
         else:
-            # 完成瞬态：短暂显示 ✓ + 提示音，再回 idle
+            # 完成态：显示 ✓ + 提示音，标题保留到下一次 set_working(True) 或 stop()
+            # 再覆盖。之前版本在同一调用里立刻回 idle，导致"done"从未可见。
             self._set_term_title("Coco · ✓ done")
             self._play_sound_async("/System/Library/Sounds/Glass.aiff")
-            self._set_term_title("Coco · idle")
 
     def notify(self, title: str, body: str = "", *, error: bool = False) -> None:
         if not self._started:
@@ -666,9 +671,19 @@ class _MacOSIslandBackend:
             return
         self._set_term_title("")
         self._started = False
+        self._title_enabled = False
 
     @staticmethod
-    def _set_term_title(text: str) -> None:
+    def _stdout_is_tty() -> bool:
+        """stdout 是否是交互终端。对 closed / detached stdout 也安全。"""
+        try:
+            return bool(sys.stdout.isatty())
+        except (ValueError, AttributeError, OSError):
+            return False
+
+    def _set_term_title(self, text: str) -> None:
+        if not self._title_enabled:
+            return
         try:
             sys.stdout.write(f"\033]0;{text}\007")
             sys.stdout.flush()

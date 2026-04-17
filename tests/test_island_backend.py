@@ -185,14 +185,8 @@ def test_macos_backend_notify_silent_before_start(
         m.assert_not_called()
 
 
-def test_macos_backend_set_working_writes_terminal_title(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """set_working 写 OSC 0 终端标题转义序列到 stdout。"""
-    b = island_mod._MacOSIslandBackend()
-    b.start()
-
-    written = []
+def _fake_tty_stdout(written: list, *, isatty: bool = True):
+    """给测试用的假 stdout：捕获 write 调用，可控 isatty 返回值。"""
 
     class _FakeStdout:
         def write(self, s):
@@ -201,7 +195,21 @@ def test_macos_backend_set_working_writes_terminal_title(
         def flush(self):
             pass
 
-    monkeypatch.setattr(island_mod.sys, "stdout", _FakeStdout())
+        def isatty(self):
+            return isatty
+
+    return _FakeStdout()
+
+
+def test_macos_backend_set_working_writes_terminal_title(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """set_working 在 TTY 下写 OSC 0 终端标题转义序列到 stdout。"""
+    written = []
+    # 必须在 start() 之前 patch —— _MacOSIslandBackend.start() 会快照 isatty 结果
+    monkeypatch.setattr(island_mod.sys, "stdout", _fake_tty_stdout(written))
+    b = island_mod._MacOSIslandBackend()
+    b.start()
     b.set_working(True)
     assert any("\033]0;" in s and "working" in s for s in written)
 
@@ -209,9 +217,7 @@ def test_macos_backend_set_working_writes_terminal_title(
 def test_macos_backend_set_working_swallows_stdout_errors(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """stdout 写失败不应崩溃（例如 stdout 重定向后 closed）。"""
-    b = island_mod._MacOSIslandBackend()
-    b.start()
+    """stdout.isatty()=True 但 write 抛 OSError（比如被 close）时不应崩溃。"""
 
     class _BadStdout:
         def write(self, s):
@@ -220,25 +226,77 @@ def test_macos_backend_set_working_swallows_stdout_errors(
         def flush(self):
             pass
 
+        def isatty(self):
+            return True
+
     monkeypatch.setattr(island_mod.sys, "stdout", _BadStdout())
+    b = island_mod._MacOSIslandBackend()
+    b.start()
     # 不应抛
     b.set_working(True)
     b.set_working(False)
 
 
-def test_macos_backend_stop_resets_title(monkeypatch: pytest.MonkeyPatch):
+def test_macos_backend_skips_title_write_when_stdout_not_tty(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """非 TTY stdout（管道/重定向/subprocess 捕获）绝不应写 OSC 转义字节。
+
+    回归保护：`coco > out.txt` 或 benchmark harness 用 subprocess 捕获输出时，
+    OSC 控制字节会污染下游解析。
+    """
+    written = []
+    monkeypatch.setattr(
+        island_mod.sys, "stdout", _fake_tty_stdout(written, isatty=False),
+    )
+    b = island_mod._MacOSIslandBackend()
+    b.start()                # 启动时快照 isatty=False
+    b.set_working(True)
+    b.set_working(False)
+    b.stop()
+    # 整条生命周期一次 write 都不应有
+    assert written == [], f"expected no stdout writes, got: {written!r}"
+
+
+def test_macos_backend_done_state_persists_until_next_working_or_stop(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """set_working(False) 后最终可见标题应是 ✓ done，而不是立刻被 idle 覆盖。
+
+    回归保护：之前版本在 else 分支最后调了 `_set_term_title("Coco · idle")`，
+    done 状态在同一调用里被覆盖、从未可见。正确行为：done 标题一直保留到下一次
+    set_working(True) 或 stop()。
+    """
+    written = []
+    monkeypatch.setattr(island_mod.sys, "stdout", _fake_tty_stdout(written))
+    # afplay 跑子进程会干扰，静音
+    monkeypatch.setattr(island_mod.subprocess, "Popen", lambda *a, **k: None)
+
     b = island_mod._MacOSIslandBackend()
     b.start()
+    b.set_working(True)
+    b.set_working(False)
+
+    # 所有写入的 OSC 序列按时间顺序
+    osc_titles = [s for s in written if s.startswith("\033]0;")]
+    assert osc_titles, "应该至少写了一个 OSC 标题"
+    last = osc_titles[-1]
+    assert "✓ done" in last, (
+        f"最后一次标题应是 done 状态（不应被 idle 覆盖），实际: {last!r}"
+    )
+    assert "idle" not in last
+
+    # 下一次 working 会覆盖 done
+    b.set_working(True)
+    osc_after = [s for s in written if s.startswith("\033]0;")]
+    assert "working" in osc_after[-1]
+
+
+def test_macos_backend_stop_resets_title(monkeypatch: pytest.MonkeyPatch):
     written = []
-
-    class _FakeStdout:
-        def write(self, s):
-            written.append(s)
-
-        def flush(self):
-            pass
-
-    monkeypatch.setattr(island_mod.sys, "stdout", _FakeStdout())
+    monkeypatch.setattr(island_mod.sys, "stdout", _fake_tty_stdout(written))
+    b = island_mod._MacOSIslandBackend()
+    b.start()
     b.stop()
     # 应当写一个清空的 OSC 0
     assert any(s == "\033]0;\007" for s in written)
