@@ -1,0 +1,25 @@
+id = "019_fibonacci"
+category = "build"
+description = "Implement fibonacci(n) with unit tests"
+prompt = "Create `src/fib.py` with a function `fibonacci(n)` that returns the nth Fibonacci number (`fibonacci(0)==0, fibonacci(1)==1, fibonacci(6)==8`). Also add `tests/test_fib.py` that covers at least three cases. `pytest tests/` must pass."
+workspace = "019_fibonacci"
+max_turns = 10
+timeout_sec = 240
+
+[[scorers]]
+type = "file_exists"
+path = "src/fib.py"
+
+[[scorers]]
+type = "file_exists"
+path = "tests/test_fib.py"
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -m pytest tests/ -q"
+timeout = 60
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -c 'from src.fib import fibonacci; assert fibonacci(0)==0 and fibonacci(1)==1 and fibonacci(6)==8 and fibonacci(10)==55'"
+timeout = 20

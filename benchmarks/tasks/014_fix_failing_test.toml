@@ -1,0 +1,12 @@
+id = "014_fix_failing_test"
+category = "multi-file"
+description = "Fix a failing unit test by fixing the implementation"
+prompt = "Running `pytest tests/` produces a failure in `tests/test_shape.py`. The test is correct; fix the implementation in `src/shape.py` so the test passes. Do not modify any file under `tests/`."
+workspace = "014_fix_failing_test"
+max_turns = 10
+timeout_sec = 240
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -m pytest tests/ -q"
+timeout = 60

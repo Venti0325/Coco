@@ -1,0 +1,26 @@
+id = "013_extract_dup"
+category = "multi-file"
+description = "Extract duplicated code into a shared helper"
+prompt = "`src/a.py` and `src/b.py` both contain a nearly identical block that clamps a value between 0 and 100. Extract it into a new helper function `clamp` in `src/util.py` (if not already there), import it from both files and replace the duplicated code. Ensure `pytest tests/` still passes."
+workspace = "013_extract_dup"
+max_turns = 10
+timeout_sec = 240
+
+[[scorers]]
+type = "grep_regex"
+pattern = "^\\s*def clamp\\("
+path = "src/util.py"
+glob = "*.py"
+min_matches = 1
+
+[[scorers]]
+type = "grep_regex"
+pattern = "from\\s+.*util\\s+import\\s+clamp|from\\s+\\.util\\s+import\\s+clamp"
+path = "src"
+glob = "**/*.py"
+min_matches = 2
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -m pytest tests/ -q"
+timeout = 60

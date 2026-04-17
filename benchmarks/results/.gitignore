@@ -1,0 +1,4 @@
+# 本目录只保留占位：实际运行产物不入 git。
+*.md
+!.gitkeep
+!.gitignore

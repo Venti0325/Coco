@@ -1,0 +1,12 @@
+id = "016_fix_offbyone"
+category = "debug"
+description = "Fix an off-by-one bug in range_sum"
+prompt = "Running `pytest tests/` shows one failure in `tests/test_range.py`. The implementation in `src/range_sum.py` has an off-by-one bug. Fix `src/range_sum.py` so the test passes. Do not modify the test."
+workspace = "016_fix_offbyone"
+max_turns = 8
+timeout_sec = 180
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -m pytest tests/ -q"
+timeout = 60

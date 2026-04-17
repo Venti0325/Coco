@@ -1,0 +1,13 @@
+id = "018_fix_unicode"
+category = "debug"
+description = "Fix a UnicodeDecodeError caused by hardcoded ascii encoding"
+prompt = "Running `python -m src.loader` raises a UnicodeDecodeError because `src/loader.py` hardcodes ascii encoding. Fix the file so it can read the UTF-8 `data.txt` without errors. Running `python -m src.loader` should succeed and print the file content."
+workspace = "018_fix_unicode"
+max_turns = 8
+timeout_sec = 180
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -m src.loader"
+timeout = 30
+expect_stdout_contains = "café"

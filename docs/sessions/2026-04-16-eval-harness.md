@@ -349,10 +349,38 @@ baseline 跑完后看：
 
 ## Summary
 
-> 待实现后填写。
->
-> - 实际改动：文件清单 + LOC
-> - Baseline 数字：成功率 / 轮数 / token / 成本
-> - 踩坑：harness 子进程 / session 读取 / scorer 边界
-> - 为后续三项改动提供的"前"数字：列到表格里
-> - commit / PR 链接
+### 实际改动
+
+Harness 框架代码（总计 ~1180 LOC，不含任务 workspace）：
+
+| 文件 | LOC |
+|---|---|
+| `benchmarks/__init__.py` | 12 |
+| `benchmarks/harness.py` | 412 |
+| `benchmarks/scorers.py` | 355 |
+| `benchmarks/report.py` | 225 |
+| `benchmarks/run.py` | 175 |
+| `tests/test_benchmarks.py` | 423 |
+
+任务资产：20 个 TOML + 20 个 workspace 模板，共 101 个文件、~1033 行 Python 代码。
+
+配套改动：
+- `pyproject.toml` 新增 `coco-bench` 脚本入口，packages.find 同时覆盖 `src/` 与仓库根下的 `benchmarks/`，pytest 的 pythonpath 对齐
+- `benchmarks/results/` 带 `.gitkeep` 入 git，`.gitignore` 忽略实际 `.md` 产物
+- `docs/changelog.md` eval harness 条目改为 done
+
+### 设计要点 / 偏离计划的部分
+
+- **Session 读取**：在 `coco --print` 模式下 Coco 主程序并不落 session JSONL（`main.py` 里 one-shot 分支显式传 `session_store=None`）。harness 仍然按计划尝试读 `core.paths.sessions_dir(ws)` 的最新 JSONL，但在没有的情况下 turns/tokens/tool_log 会退化成 0——这在 baseline 阶段是可接受的；若后续要更细粒度，需要在 `main.py` `--print` 分支开放一个"只读落盘"开关，属于独立小改动。
+- **Scorer 模板引用**：原始计划用 `reference` 字段指向模板目录，但 scorer 运行时拿到的 workspace 是 tmp 副本，模板路径在 TOML 作者视角不方便写对。harness 自动把原始模板路径作为 `__template__` 注入每个 scorer params，`no_file_modified` 和 `file_equals` 优先读它；任务 TOML 里就不用重复写 reference。
+- **grep_regex 的零匹配语义**：为了表达"这个符号已经彻底不见了"，引入同时设置 `min_matches=0` + `max_matches=0` 的写法，007/008/010/011 多处使用。
+- **turns_under**：session 为空时（`--print` 模式常态）视为"无法判定，通过"并在 detail 里写 `skipped`，避免所有带 `turns_under` 的任务集体假阳性。
+
+### 验证
+
+- `pytest tests/ -v` 全部通过：**140 passed**（原 117 + 新增 23）
+- `python -m benchmarks.run --tasks 001 --provider anthropic --model dummy` 走通加载 → subprocess → 报告落盘全链路，最终 `err=timeout`（因 dummy model 请求挂起 120 s 再被 harness 硬超时），报告文件成功写入 `benchmarks/results/`
+
+### 待办
+
+**Baseline 测量尚未运行 —— 需要用户配置 API key 后跑一次 `python -m benchmarks.run`**。产物会落到 `benchmarks/results/<时间戳>.md`（受 gitignore 排除），人工 review 后如要作为 baseline 再显式 `git add -f <file>` 入库。

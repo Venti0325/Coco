@@ -1,0 +1,23 @@
+id = "011_global_rename"
+category = "multi-file"
+description = "Rename a function across 3 files"
+prompt = "Rename the function `calculate_price` to `compute_price` everywhere it appears in this project (definition and all call sites). The new name must be used in at least 3 files."
+workspace = "011_global_rename"
+max_turns = 10
+timeout_sec = 240
+
+[[scorers]]
+type = "grep_regex"
+pattern = "\\bcompute_price\\b"
+min_matches = 3
+
+[[scorers]]
+type = "grep_regex"
+pattern = "\\bcalculate_price\\b"
+min_matches = 0
+max_matches = 0
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -c 'from src.main import run; assert run()>0'"
+timeout = 30

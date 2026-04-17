@@ -1,0 +1,19 @@
+id = "015_add_cli_flag"
+category = "multi-file"
+description = "Add --upper flag that uppercases CLI output"
+prompt = "The CLI in `src/cli.py` prints a greeting. Add a new flag `--upper`; when present, the greeting must be printed in uppercase. The existing behaviour without the flag must stay identical."
+workspace = "015_add_cli_flag"
+max_turns = 8
+timeout_sec = 240
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -m src.cli --name alice --upper"
+timeout = 20
+expect_stdout_contains = "HELLO ALICE"
+
+[[scorers]]
+type = "command_succeeds"
+command = "python -m src.cli --name alice"
+timeout = 20
+expect_stdout_contains = "Hello alice"
