@@ -529,6 +529,18 @@ def _cmd_doctor(ctx: CommandContext, args: str) -> None:
     except Exception as e:
         log.info(f"  {fail} 数据目录写入失败: {e}")
 
+    # 9. 灵动岛 backend
+    try:
+        from .island import _choose_backend
+        backend = _choose_backend()
+        backend_name = type(backend).__name__.lstrip("_").removesuffix("IslandBackend")
+        if getattr(backend, "available", False):
+            log.info(f"  {ok} 灵动岛: {backend_name}")
+        else:
+            log.info(f"  {warn} 灵动岛: 已禁用 ({backend_name})")
+    except Exception as e:
+        log.info(f"  {warn} 灵动岛: 检测失败 ({e})")
+
     log.info("")
 
 

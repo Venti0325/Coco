@@ -1,28 +1,29 @@
-"""灵动岛式浮动通知窗口（美化版）。
+"""灵动岛式浮动通知（跨平台 backend 分发）。
 
-在独立守护线程中运行 tkinter 事件循环，主线程通过 Queue 传递消息，
-tkinter 线程用 after() 轮询，完全避免跨线程 UI 调用。
+三种 backend 按平台选：
+  - ``_TkIslandBackend``    Windows / Linux：tkinter 后台线程跑浮动窗（原实现）
+  - ``_MacOSIslandBackend`` macOS：终端标题 + osascript 通知 + afplay 系统音。
+    macOS Cocoa 强制 NSWindow 必须在主线程创建，tkinter 守护线程会立即 abort；
+    原生方案既绕开限制，又提供等价体验（通知中心 + 终端标题）。
+  - ``_NullIslandBackend``  GUI 不可用 / ``COCO_NO_ISLAND=1`` 时的静默保底。
 
-视觉特性：
-  - `-transparentcolor` 实现真正的透明圆角（无方形白边）
-  - Canvas 圆角多边形背景 + 状态感知边框颜色
-  - 各状态配独立边框色（idle 灰 / working 暗黄 / done 暗绿 / permission 暗橙 / error 暗红）
-  - 完成时播放系统提示音
+公开 API（``DynamicIsland``）完全向后兼容——调用方零感知：
 
-公开 API（线程安全，可从任意线程调用）：
     island = DynamicIsland().start()
-    island.set_working(True)          # Coco 开始处理请求
-    island.set_working(False)         # 处理完成，回到 idle
-    island.notify("标题", "正文")      # 弹出通知，4.5 秒后自动收缩
-    island.ask_permission(tool, inputs) -> str  # 阻塞等待权限确认
-    island.stop()                     # 退出时关闭窗口
+    island.set_working(True)
+    island.set_working(False)
+    island.notify("标题", "正文")
+    island.ask_permission(tool, inputs) -> str   # 不支持时抛 NotImplementedError
+    island.stop()
 """
 
 from __future__ import annotations
 
 import math
+import os
 import queue
 import re
+import subprocess
 import sys
 import threading
 from dataclasses import dataclass, field
@@ -130,11 +131,11 @@ def _play_sound(name: str) -> None:
         pass
 
 
-# ── 公开接口 ──────────────────────────────────────────────────────────────────
+# ── Tk backend（Windows / Linux） ────────────────────────────────────────────
 
 
-class DynamicIsland:
-    """浮动通知小窗口。tkinter 不可用时所有调用静默忽略。"""
+class _TkIslandBackend:
+    """tkinter 浮动窗 backend。可直接 abort 的线程用法仅在非 macOS 平台安全。"""
 
     def __init__(self) -> None:
         self._q: queue.Queue[_Msg] = queue.Queue()
@@ -145,14 +146,13 @@ class DynamicIsland:
     def available(self) -> bool:
         return self._available
 
-    def start(self) -> "DynamicIsland":
-        """启动后台 tkinter 线程，返回 self 支持链式调用。"""
+    def start(self) -> None:
+        """启动后台 tkinter 线程。"""
         if not self._available:
-            return self
+            return
         t = threading.Thread(target=self._run, daemon=True, name="coco-island")
         t.start()
         self._thread = t
-        return self
 
     def notify(self, title: str, body: str = "", *, error: bool = False) -> None:
         """弹出通知气泡，_DISMISS_MS 后自动收缩。"""
@@ -570,4 +570,176 @@ def _apply_win11_corners(root: "tk.Tk") -> None:
         ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
     except Exception:
         pass
+
+
+# ── Null backend（GUI 不可用 / 环境变量禁用）─────────────────────────────────
+
+
+class _NullIslandBackend:
+    """静默 no-op。所有方法都安全可调用。"""
+
+    available = False
+
+    def start(self) -> None:
+        pass
+
+    def set_working(self, working: bool) -> None:
+        pass
+
+    def notify(self, title: str, body: str = "", *, error: bool = False) -> None:
+        pass
+
+    def ask_permission(self, tool: str, inputs: dict) -> str:
+        # 让 PermissionChecker 回退到终端 input()。
+        raise NotImplementedError("island disabled")
+
+    def stop(self) -> None:
+        pass
+
+
+# ── macOS backend（原生风格：终端标题 + 系统通知 + 系统音）───────────────────
+
+
+class _MacOSIslandBackend:
+    """macOS 原生风格 backend。
+
+    通知走 ``osascript display notification``（进 macOS 通知中心）；
+    状态变化走 xterm OSC 0 终端标题序列（Terminal.app + iTerm2 均支持）；
+    完成/错误用 ``afplay`` 播系统 AIFF。
+
+    权限确认不实现——``ask_permission`` 抛 ``NotImplementedError`` 让
+    ``PermissionChecker`` 自然回退到终端 input()（该路径已存在）。
+
+    后续若要升级为真·浮动岛（pyobjc + NSWindow），替换此类即可对上游透明。
+    """
+
+    available = True
+
+    def __init__(self) -> None:
+        self._started = False
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._started = True
+        self._set_term_title("Coco · idle")
+
+    def set_working(self, working: bool) -> None:
+        if not self._started:
+            return
+        if working:
+            self._set_term_title("Coco · working…")
+        else:
+            # 完成瞬态：短暂显示 ✓ + 提示音，再回 idle
+            self._set_term_title("Coco · ✓ done")
+            self._play_sound_async("/System/Library/Sounds/Glass.aiff")
+            self._set_term_title("Coco · idle")
+
+    def notify(self, title: str, body: str = "", *, error: bool = False) -> None:
+        if not self._started:
+            return
+        subtitle = "Coco · error" if error else "Coco"
+        script = (
+            f'display notification "{_osa_escape(body)}" '
+            f'with title "{_osa_escape(subtitle)}" '
+            f'subtitle "{_osa_escape(title)}"'
+        )
+        try:
+            subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                timeout=2,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        if error:
+            self._play_sound_async("/System/Library/Sounds/Basso.aiff")
+
+    def ask_permission(self, tool: str, inputs: dict) -> str:
+        raise NotImplementedError(
+            "macOS backend does not provide GUI permission dialog; terminal fallback will be used"
+        )
+
+    def stop(self) -> None:
+        if not self._started:
+            return
+        self._set_term_title("")
+        self._started = False
+
+    @staticmethod
+    def _set_term_title(text: str) -> None:
+        try:
+            sys.stdout.write(f"\033]0;{text}\007")
+            sys.stdout.flush()
+        except (OSError, ValueError):
+            pass
+
+    @staticmethod
+    def _play_sound_async(path: str) -> None:
+        try:
+            subprocess.Popen(
+                ["afplay", path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except (OSError, FileNotFoundError):
+            pass
+
+
+def _osa_escape(s: str) -> str:
+    """osascript 字符串转义：反斜杠和双引号。"""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+# ── Backend 选择 + 公开 facade ───────────────────────────────────────────────
+
+
+def _choose_backend() -> "_IslandBackendLike":
+    """按平台/环境选 backend。
+
+    顺序：COCO_NO_ISLAND 优先 → darwin 用原生 → 有 Tk 用 Tk → 否则 Null。
+    """
+    if os.environ.get("COCO_NO_ISLAND", "").strip().lower() in ("1", "true", "yes", "on"):
+        return _NullIslandBackend()
+    if sys.platform == "darwin":
+        return _MacOSIslandBackend()
+    if _HAS_TK:
+        return _TkIslandBackend()
+    return _NullIslandBackend()
+
+
+# 类型别名：所有 backend 的结构化鸭子类型（无需正式 Protocol 运行时）。
+_IslandBackendLike = object
+
+
+class DynamicIsland:
+    """浮动通知公开入口，按平台委托给具体 backend。
+
+    保留 tkinter 时代的 API 形状（``available`` / ``start`` / ``set_working`` /
+    ``notify`` / ``ask_permission`` / ``stop``），所有调用点零感知。
+    """
+
+    def __init__(self) -> None:
+        self._backend = _choose_backend()
+
+    @property
+    def available(self) -> bool:
+        return bool(getattr(self._backend, "available", False))
+
+    def start(self) -> "DynamicIsland":
+        self._backend.start()
+        return self
+
+    def set_working(self, working: bool) -> None:
+        self._backend.set_working(working)
+
+    def notify(self, title: str, body: str = "", *, error: bool = False) -> None:
+        self._backend.notify(title, body, error=error)
+
+    def ask_permission(self, tool: str, inputs: dict) -> str:
+        return self._backend.ask_permission(tool, inputs)
+
+    def stop(self) -> None:
+        self._backend.stop()
 
