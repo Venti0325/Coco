@@ -8,10 +8,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 if TYPE_CHECKING:
     from .llm import LLMClient
+    from .mcp.manager import MCPManager
 
 from . import log
 from .models import AppSettings
@@ -44,6 +45,7 @@ class CommandContext:
     compact_service: CompactService | None = None
     system_prompt: str = ""
     llm_client: "LLMClient | None" = field(default=None, repr=False)
+    mcp_manager: Any | None = field(default=None, repr=False)
 
 
 def parse_command(text: str) -> tuple[str, str] | None:
@@ -551,6 +553,90 @@ def _cmd_doctor(ctx: CommandContext, args: str) -> None:
     except Exception as e:
         log.info(f"  {warn} 灵动岛: 检测失败 ({e})")
 
+    # 10. MCP 诊断：依赖 + 配置 + 当前已加载的 server 状态
+    try:
+        import mcp  # noqa: F401
+        mcp_installed = True
+    except ImportError:
+        mcp_installed = False
+
+    try:
+        from .mcp.config import load_mcp_configs
+        cfgs = load_mcp_configs(ctx.workspace)
+    except Exception:
+        cfgs = []
+
+    if cfgs:
+        if mcp_installed:
+            log.info(f"  {ok} MCP: {len(cfgs)} 个 server 已配置")
+        else:
+            log.info(f"  {fail} MCP: {len(cfgs)} 个 server 已配置，但 mcp 依赖未安装")
+            log.dim("    运行 pip install 'coco[mcp]' 安装")
+        for c in cfgs:
+            argstr = " ".join(c.args)
+            log.dim(f"    · {c.name}: {c.command} {argstr}".rstrip())
+    elif mcp_installed:
+        log.info(f"  {ok} MCP: 依赖已安装，未配置任何 server")
+    else:
+        log.info(f"  {warn} MCP: 未启用（可选依赖 mcp 未安装）")
+
+    mgr = getattr(ctx, "mcp_manager", None)
+    if mgr is not None:
+        try:
+            rows = mgr.list_server_status()
+        except Exception:
+            rows = []
+        if rows:
+            log.dim("    当前状态:")
+            for name, status, count in rows:
+                count_str = f"{count} tools" if count >= 0 else "—"
+                log.dim(f"      {name}  [{status}]  {count_str}")
+
+    log.info("")
+
+
+def _cmd_mcp(ctx: CommandContext, args: str) -> None:
+    """列出已配置 MCP server 的状态与工具数。"""
+    _ = args
+    mgr = getattr(ctx, "mcp_manager", None)
+    if mgr is None:
+        # 区分“未安装 mcp 依赖”与“无配置”——给用户下一步指令
+        try:
+            from .mcp.config import load_mcp_configs
+            cfgs = load_mcp_configs(ctx.workspace)
+        except Exception:
+            cfgs = []
+        if not cfgs:
+            log.dim("（未配置 MCP server）")
+            log.dim("  配置路径：~/.config/coco/mcp_servers.toml 或 <ws>/.coco/mcp_servers.toml")
+            log.dim("  依赖：pip install 'coco[mcp]'")
+            return
+        try:
+            import mcp  # noqa: F401
+        except ImportError:
+            log.warn("检测到 MCP 配置，但 mcp 依赖未安装；请运行 pip install 'coco[mcp]'")
+            for c in cfgs:
+                log.dim(f"  · {c.name}: {c.command} {' '.join(c.args)}".rstrip())
+            return
+        log.dim("检测到 MCP 配置，但 manager 未加载（可能启动失败，详见启动日志）。")
+        for c in cfgs:
+            log.dim(f"  · {c.name}: {c.command} {' '.join(c.args)}".rstrip())
+        return
+
+    try:
+        rows = mgr.list_server_status()
+    except Exception as e:
+        log.warn(f"列 MCP 状态失败：{e}")
+        return
+
+    if not rows:
+        log.dim("（MCP 配置为空）")
+        return
+
+    log.info("MCP servers:")
+    for name, status, count in rows:
+        count_str = f"{count} tools" if count >= 0 else "—"
+        log.dim(f"  {name:20s}  [{status}]  {count_str}")
     log.info("")
 
 
@@ -564,6 +650,7 @@ _COMMAND_HELP: list[tuple[str, str]] = [
     ("resume", "恢复会话：/resume <序号|id 前缀>"),
     ("compact", "压缩对话上下文：/compact <可选说明>"),
     ("skills", "列出可用技能"),
+    ("mcp", "MCP server 状态与工具列表"),
     ("workspace 或 cd", "切换工作区：/workspace <路径>"),
     ("exit 或 quit", "退出 REPL"),
 ]
@@ -579,6 +666,7 @@ _COMMANDS: dict[str, CommandHandler] = {
     "resume": _cmd_resume,
     "compact": _cmd_compact,
     "skills": _cmd_skills,
+    "mcp": _cmd_mcp,
     "workspace": _cmd_workspace,
     "ws": _cmd_workspace,
     "cd": _cmd_workspace,
