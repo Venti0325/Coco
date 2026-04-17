@@ -15,9 +15,11 @@ if TYPE_CHECKING:
     from .mcp.manager import MCPManager
 
 from . import log
-from .models import AppSettings
+from .context_window import context_window_for
+from .models import AppSettings, TokenUsage
 from .session import SessionMeta, SessionStore
 from .compact import CompactService, estimate_tokens
+from .microcompact import micro_compact
 from .skills import Skill, get_skill, list_skills
 
 DispatchResult = Literal["not_slash", "handled", "unknown", "exit"]
@@ -35,6 +37,8 @@ class ReplState:
     pending_fork: tuple[Skill, str] | None = None  # (skill, prompt)
     pending_skill: Skill | None = None  # for inline skill execution
     post_run_callback: Callable[[], None] | None = None  # 下一轮 run 结束后执行
+    # 跨轮累计 token 用量——用于 auto-compact 决策与 REPL 水位显示。
+    session_usage: TokenUsage = field(default_factory=TokenUsage)
 
 
 @dataclass
@@ -199,7 +203,40 @@ def _cmd_workspace(ctx: CommandContext, args: str) -> None:
 
 
 def _cmd_compact(ctx: CommandContext, args: str) -> None:
-    """将较早的消息压缩为摘要，保留最近若干条消息。"""
+    """压缩对话上下文。
+
+    - ``/compact``                 —— 走 LLM 摘要（整体 summary）
+    - ``/compact --micro``         —— 仅做本地 micro-compact：
+      替换早期大体积 Read/Glob/Grep/Shell 输出为占位符
+    """
+    args_low = (args or "").strip().lower()
+
+    # micro 分支：不依赖 compact_service，纯本地裁剪。
+    if args_low.startswith("--micro"):
+        msgs = list(ctx.state.chat_messages)
+        if len(msgs) < 4:
+            log.dim("（消息太少，无法裁剪。）")
+            return
+        window = context_window_for(ctx.settings.model)
+        target = int(window * 0.3)  # 目标释放约 30% 窗口
+        new_msgs, freed, count = micro_compact(
+            msgs,
+            target_free_tokens=max(target, 1),
+        )
+        if count == 0 or freed <= 0:
+            log.dim("（无可裁剪的早期工具结果。）")
+            return
+        ctx.state.chat_messages.clear()
+        ctx.state.chat_messages.extend(new_msgs)
+        try:
+            ctx.state.session_store.save_transcript(new_msgs)
+        except Exception:
+            pass
+        log.info(
+            f"Micro-compact 完成：裁剪 {count} 个旧工具结果，释放 ~{freed:,} tokens"
+        )
+        return
+
     if ctx.compact_service is None:
         log.warn("compact 未启用（缺少 compact_service）。")
         return
@@ -592,6 +629,17 @@ def _cmd_doctor(ctx: CommandContext, args: str) -> None:
                 count_str = f"{count} tools" if count >= 0 else "—"
                 log.dim(f"      {name}  [{status}]  {count_str}")
 
+    # 11. Context window 水位
+    try:
+        window = context_window_for(ctx.settings.model)
+        used = getattr(ctx.state, "session_usage", TokenUsage()).input_tokens
+        if used > 0 and window > 0:
+            pct = used / window * 100
+            log.info(f"  {ok} Context: {used:,} / {window:,} ({pct:.0f}%)")
+        else:
+            log.info(f"  {ok} Context window: {window:,} (暂无用量数据)")
+    except Exception:
+        pass
     log.info("")
 
 
@@ -648,7 +696,7 @@ _COMMAND_HELP: list[tuple[str, str]] = [
     ("clear", "清空上下文并开始新会话"),
     ("history", "列出当前工作区已保存会话"),
     ("resume", "恢复会话：/resume <序号|id 前缀>"),
-    ("compact", "压缩对话上下文：/compact <可选说明>"),
+    ("compact", "压缩对话上下文：/compact 或 /compact --micro（仅裁剪早期工具结果）"),
     ("skills", "列出可用技能"),
     ("mcp", "MCP server 状态与工具列表"),
     ("workspace 或 cd", "切换工作区：/workspace <路径>"),
