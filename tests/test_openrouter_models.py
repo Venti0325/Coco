@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -370,6 +371,148 @@ def test_lookup_disk_only_mode_uses_stale_disk_cache(
     assert lookup_max_completion_tokens(
         "foo/bar", allow_remote_fetch=False,
     ) == 1000
+
+
+# ── /model 命令路径：allow_remote_fetch=True 真的会拉远程 ───────────
+
+
+def test_infer_max_tokens_explicit_remote_fetch_uses_dynamic(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """`/model` 命令传 allow_remote_fetch=True 时，缓存缺失会触发 _fetch_remote 拿动态值。"""
+    from core.config import _infer_max_tokens
+    from core.models import Provider
+
+    fetch_called = {"n": 0}
+
+    def fake_fetch():
+        fetch_called["n"] += 1
+        return {"anthropic/claude-sonnet-4-5": 88_888}
+
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", fake_fetch)
+
+    result = _infer_max_tokens(
+        "anthropic/claude-sonnet-4-5",
+        provider=Provider.OPENROUTER,
+        allow_remote_fetch=True,
+    )
+    assert result == 88_888
+    assert fetch_called["n"] == 1
+
+
+def test_infer_max_tokens_default_does_not_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """默认 allow_remote_fetch=False（启动安全路径），不发 HTTP。"""
+    from core.config import _infer_max_tokens
+    from core.models import Provider
+
+    def explode():
+        raise AssertionError("default _infer_max_tokens must not fetch")
+
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", explode)
+
+    # 不传 allow_remote_fetch → 默认 False
+    assert _infer_max_tokens(
+        "anthropic/claude-sonnet-4-5", provider=Provider.OPENROUTER,
+    ) == 32_000   # 静态表兜底
+
+
+# ── warm_cache_async 后台预热 ────────────────────────────────────────
+
+
+def test_warm_cache_async_spawns_thread_and_fetches(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """warm_cache_async 启动后台线程，调用 _fetch_remote，写入磁盘缓存。"""
+    from core.openrouter_models import warm_cache_async
+
+    fetch_called = threading.Event()
+
+    def fake_fetch():
+        fetch_called.set()
+        return {"anthropic/claude-sonnet-4-5": 32_000, "openai/gpt-5": 16_384}
+
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", fake_fetch)
+    # 主动取消默认禁用，让 warmup 真的跑起来
+    monkeypatch.delenv("COCO_DISABLE_OPENROUTER_WARMUP", raising=False)
+
+    thread = warm_cache_async()
+    assert thread is not None
+    thread.join(timeout=2)
+    assert fetch_called.is_set(), "warm_cache_async 应在后台调用 _fetch_remote"
+
+    # 缓存应已写盘——后续 disk-only 查询能命中
+    assert lookup_max_completion_tokens(
+        "openai/gpt-5", allow_remote_fetch=False,
+    ) == 16_384
+
+
+def test_warm_cache_async_disabled_by_env(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """COCO_DISABLE_OPENROUTER_WARMUP=1 时返回 None 且绝不发请求。"""
+    from core.openrouter_models import warm_cache_async
+
+    def explode():
+        raise AssertionError("warmup must not run when disabled")
+
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", explode)
+    monkeypatch.setenv("COCO_DISABLE_OPENROUTER_WARMUP", "1")
+
+    assert warm_cache_async() is None
+
+
+def test_llm_client_from_settings_openrouter_triggers_warmup(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """LLMClient.from_settings(OPENROUTER) 应当触发后台 warmup。"""
+    from core.llm import LLMClient
+    from core.models import AppSettings, Provider
+
+    fetch_called = threading.Event()
+
+    def fake_fetch():
+        fetch_called.set()
+        return {"x/y": 1234}
+
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", fake_fetch)
+    monkeypatch.delenv("COCO_DISABLE_OPENROUTER_WARMUP", raising=False)
+
+    settings = AppSettings(
+        provider=Provider.OPENROUTER,
+        model="anthropic/claude-sonnet-4-5",
+        api_key="sk-or-test",
+    )
+    LLMClient.from_settings(settings)
+
+    # 等后台线程跑完
+    assert fetch_called.wait(timeout=2), \
+        "from_settings(OPENROUTER) 应当触发 warm_cache_async"
+
+
+def test_llm_client_from_settings_openai_does_not_trigger_warmup(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """from_settings(OPENAI) 不应触发 OpenRouter warmup（隔离）。"""
+    from core.llm import LLMClient
+    from core.models import AppSettings, Provider
+
+    def explode():
+        raise AssertionError("OPENAI provider must not trigger OpenRouter warmup")
+
+    monkeypatch.setattr("core.openrouter_models._fetch_remote", explode)
+    monkeypatch.delenv("COCO_DISABLE_OPENROUTER_WARMUP", raising=False)
+
+    settings = AppSettings(
+        provider=Provider.OPENAI,
+        model="gpt-5",
+        api_key="sk-test",
+    )
+    LLMClient.from_settings(settings)
+    # 给后台线程一点时间——如果错误地启动了 warmup，explode 会被调
+    import time
+    time.sleep(0.1)
 
 
 def test_load_settings_never_hits_network_for_openrouter(

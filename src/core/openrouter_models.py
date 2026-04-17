@@ -9,13 +9,20 @@
 
 线程安全：一个模块级锁保护内存缓存；磁盘读写不加锁（覆盖写幂等）。
 
-启动不变量：`core.config._infer_max_tokens` 必须用 `allow_remote_fetch=False` 调用本模块。
-REPL 启动过程严格不发网络请求——首次 LLM 请求（或显式的刷新命令）再负责预热缓存。
+启动不变量：`core.config._infer_max_tokens` 默认 ``allow_remote_fetch=False``，
+``load_settings`` 路径绝不发网络。运行时可触发 fetch 的入口有两条：
+
+1. **`/model` 命令** —— 用户显式切换模型时同步 fetch（commands.py 调用 _infer_max_tokens
+   时传 ``allow_remote_fetch=True``）。
+2. **后台预热（`warm_cache_async`）** —— `LLMClient.from_settings(OPENROUTER)` 触发一个
+   守护线程拉一次 /v1/models。fire-and-forget，本次启动用不上但下次启动 / 后续 /model
+   切换都能受益。测试通过 ``COCO_DISABLE_OPENROUTER_WARMUP=1`` 环境变量关闭。
 """
 
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import urllib.error
@@ -175,3 +182,46 @@ def _reset_for_tests() -> None:
     with _lock:
         _mem_cache = None
         _mem_cache_at = 0.0
+
+
+# ── 后台预热 ──────────────────────────────────────────────────────────
+
+
+_WARMUP_DISABLE_ENV = "COCO_DISABLE_OPENROUTER_WARMUP"
+# 用一个不可能撞到真实 model_id 的占位符；目的只是触发底层 _fetch_remote
+# 把整张表灌进缓存，返回值直接丢弃。
+_WARMUP_SENTINEL_MODEL = "__warmup__/__sentinel__"
+
+
+def warm_cache_async() -> threading.Thread | None:
+    """在守护线程里 fire-and-forget 触发一次 /v1/models 拉取，预热缓存。
+
+    幂等：如果内存或磁盘缓存仍新鲜，``lookup_max_completion_tokens`` 直接返回
+    不发网络；如果过期或缺失则同步拉取后写盘。所有异常都被吞——预热失败不应
+    影响主流程。
+
+    被 ``LLMClient.from_settings(OPENROUTER)`` 调用，本次启动通常用不上结果
+    （`load_settings` 早就用静态表算完 ``max_tokens`` 了），但磁盘缓存写好后，
+    下次启动 / `/model` 切换 / 任何 ``allow_remote_fetch=True`` 的查询都能命中。
+
+    设 ``COCO_DISABLE_OPENROUTER_WARMUP=1`` 可禁用——测试或离线环境用。
+    返回启动的线程对象（便于测试 join），禁用时返回 None。
+    """
+    if os.environ.get(_WARMUP_DISABLE_ENV):
+        return None
+
+    def _worker() -> None:
+        try:
+            lookup_max_completion_tokens(
+                _WARMUP_SENTINEL_MODEL, allow_remote_fetch=True,
+            )
+        except Exception:
+            pass
+
+    thread = threading.Thread(
+        target=_worker,
+        name="coco-openrouter-warmup",
+        daemon=True,
+    )
+    thread.start()
+    return thread

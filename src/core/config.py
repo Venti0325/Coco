@@ -167,19 +167,30 @@ def _from_cli(args: Namespace) -> dict:
 _FALLBACK_MAX_TOKENS = 8_192   # 保守兜底；未知模型通常支持 8192，需要更多时用 COCO_MAX_TOKENS 覆盖
 
 
-def _infer_max_tokens(model: str, *, provider: Provider | None = None) -> int:
+def _infer_max_tokens(
+    model: str,
+    *,
+    provider: Provider | None = None,
+    allow_remote_fetch: bool = False,
+) -> int:
     """根据模型名前缀查表，未匹配时返回通用兜底值。
 
-    OpenRouter 路径：先尝试从**已有**的内存/磁盘缓存读取真实
-    ``top_provider.max_completion_tokens``；**不发 HTTP**（启动不变量）。
-    缓存缺失或命中失败时回落到静态前缀表。其他 provider 或无 provider 信息时直接走静态表。
+    OpenRouter 路径有两档：
 
-    远程预热缓存由首次 LLM 请求路径负责，不在这条配置加载路径里做。
+    - ``allow_remote_fetch=False``（**默认，启动安全**）：仅读已有内存/磁盘缓存，
+      绝不发 HTTP。``load_settings`` 路径必须用此默认值，避免 REPL 启动被网络阻塞。
+    - ``allow_remote_fetch=True``（**显式运行时调用**）：缓存缺失或过期时同步 fetch
+      `/v1/models`。`/model` 命令切换模型时使用——用户已经明确等待。
+
+    所有失败（网络挂、超时、解析错误）都回落到静态 ``_MAX_TOKENS_TABLE``。其他 provider
+    或无 provider 信息时直接走静态表。
     """
     if provider == Provider.OPENROUTER and "/" in model:
         try:
             from .openrouter_models import lookup_max_completion_tokens
-            dynamic = lookup_max_completion_tokens(model, allow_remote_fetch=False)
+            dynamic = lookup_max_completion_tokens(
+                model, allow_remote_fetch=allow_remote_fetch,
+            )
             if dynamic and dynamic > 0:
                 return dynamic
         except Exception:

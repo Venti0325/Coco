@@ -337,6 +337,13 @@ class LLMClient:
                 },
                 pass_fallback_models=True,
             )
+            # 后台预热 OpenRouter 模型表，本次启动用不上但写好磁盘缓存供后续使用。
+            # fire-and-forget；测试用 COCO_DISABLE_OPENROUTER_WARMUP=1 关闭。
+            try:
+                from .openrouter_models import warm_cache_async
+                warm_cache_async()
+            except Exception:
+                pass
         elif settings.provider == Provider.OPENAI:
             backend = _OpenAIBackend(settings)
         else:
