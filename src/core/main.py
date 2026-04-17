@@ -342,6 +342,10 @@ def entry() -> None:
                 island.set_working(True)
             except Exception:
                 pass
+            # 默认失败；engine.run() 正常返回后才翻成 True。让 finally 里的
+            # set_working(False) 能正确区分成功（✓ done + chime）与失败
+            # （静默回 idle），避免失败请求被错误地显示为成功。
+            turn_success = False
             try:
                 result = engine.run(
                     text,
@@ -349,6 +353,7 @@ def entry() -> None:
                     on_text_chunk=_on_text_chunk,
                     on_tool_call=_on_tool_call,
                 )
+                turn_success = True
             except AbortedError:
                 _stop_spinner()
                 console.print()
@@ -367,7 +372,7 @@ def entry() -> None:
                 perms.pause_fn = None
                 perms.resume_fn = None
                 try:
-                    island.set_working(False)
+                    island.set_working(False, success=turn_success)
                 except Exception:
                     pass
 

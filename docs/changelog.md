@@ -11,6 +11,8 @@
 
 ## 2026-04-16
 
+- **(done)** 灵动岛 macOS 支持（P0 崩溃修复）：`island.py` 抽出 backend 协议（`_IslandBackend` 形）；现有 tkinter 代码保持原地，类名改为 `_TkIslandBackend`；新增 `_MacOSIslandBackend`（终端标题 OSC 0 + `osascript display notification` 进通知中心 + `afplay` 系统音，`ask_permission` 抛 `NotImplementedError` 让 `PermissionChecker` 回退终端）；新增 `_NullIslandBackend` + `COCO_NO_ISLAND` env 开关；新增 `DynamicIsland` 薄 facade + `_choose_backend()` 按平台分发；`/doctor` 加 backend 状态行；零新依赖；163 tests passed → [sessions/2026-04-16-island-macos.md](sessions/2026-04-16-island-macos.md)
+
 - **(planned)** Eval harness：`benchmarks/` 目录 + 20 个种子任务 + 可组合 scorer + markdown 报告。用于量化其他三项改动的收益。**优先实施**，因为 baseline 数字是后续所有改动的对照组 → [sessions/2026-04-16-eval-harness.md](sessions/2026-04-16-eval-harness.md)
 - **(planned)** 并行工具调用：`ToolSpec.is_concurrency_safe`（默认跟随 `is_read_only`）+ engine 按并发安全性分批 + `ThreadPoolExecutor` 并行执行 + 结果保序；`COCO_MAX_TOOL_CONCURRENCY` 可配（默认 10）→ [sessions/2026-04-16-parallel-tools.md](sessions/2026-04-16-parallel-tools.md)
 - **(planned)** Context engineering：真实 token 追踪 + REPL 水位显示；`context_window.py` 按模型推断窗口；`microcompact.py` 选择性裁剪早期工具结果（Read/Grep/Glob/Shell）为占位符；三级 auto-compact（70% micro / 85% full）→ [sessions/2026-04-16-context-engineering.md](sessions/2026-04-16-context-engineering.md)
