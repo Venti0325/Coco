@@ -52,6 +52,7 @@ class AppSettings:
     # 仅在 provider=openrouter 时生效。其他 provider 即使设置也会被忽略，
     # 不会注入请求——详见 llm.py:_OpenAIBackend.pass_fallback_models 开关。
     fallback_models: tuple[str, ...] = ()
+    max_tool_concurrency: int = 10     # 单批并发工具上限（1 = 纯串行）
 
 
 # ── Token 用量追踪 ────────────────────────────────────────────────────

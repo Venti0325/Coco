@@ -201,6 +201,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-tokens", type=int, help="每轮响应的最大输出 token 数")
     p.add_argument("--effort", choices=("low", "medium", "high"),
                    help="OpenAI 模型的推理力度")
+    p.add_argument("--max-tool-concurrency", type=int,
+                   help="并行工具调用上限（默认 10，设为 1 等价于串行）")
     p.add_argument(
         "--auto-approve",
         action="store_true",
@@ -279,6 +281,7 @@ def entry() -> None:
             allowed_tools=allowed_tools,
             workspace=ws,
             allowed_paths=allowed_paths,
+            max_tool_concurrency=settings.max_tool_concurrency,
         )
 
     def _run_query(

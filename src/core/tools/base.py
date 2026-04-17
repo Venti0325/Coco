@@ -19,6 +19,13 @@ class ToolSpec:
     description: str
     input_schema: dict[str, Any]
     is_read_only: bool = False
+    # None = 跟随 is_read_only；少数例外工具（共享 session/连接池等）可显式 override。
+    is_concurrency_safe: bool | None = None
+
+    @property
+    def concurrency_safe(self) -> bool:
+        """最终的并发安全判定：未显式指定则回退到 is_read_only。"""
+        return self.is_read_only if self.is_concurrency_safe is None else self.is_concurrency_safe
 
 
 @dataclass(slots=True)
@@ -47,3 +54,8 @@ class Tool(ABC):
     def is_read_only(self) -> bool:
         """是否只读；供后续 permissions 与 UI 使用。"""
         return self.spec.is_read_only
+
+    @property
+    def is_concurrency_safe(self) -> bool:
+        """是否可与同批并发安全调用；默认跟随 is_read_only。"""
+        return self.spec.concurrency_safe

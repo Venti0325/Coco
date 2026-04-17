@@ -24,6 +24,7 @@ def _clear_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "COCO_MAX_TOKENS",
         "COCO_EFFORT",
         "COCO_FALLBACK_MODELS",
+        "COCO_MAX_TOOL_CONCURRENCY",
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_BASE_URL",
         "OPENAI_API_KEY",
@@ -308,3 +309,59 @@ def test_fallback_models_set_on_openrouter_enables_passthrough():
     )
     client = LLMClient.from_settings(settings)
     assert client._backend._pass_fallback_models is True
+
+
+def test_load_settings_max_tool_concurrency_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_args: Namespace,
+):
+    """COCO_MAX_TOOL_CONCURRENCY 环境变量写入 AppSettings.max_tool_concurrency。"""
+    _clear_config_env(monkeypatch)
+    monkeypatch.setattr(
+        "core.config.user_config_file",
+        lambda: tmp_path / "missing.toml",
+    )
+    monkeypatch.setenv("COCO_MAX_TOOL_CONCURRENCY", "6")
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.max_tool_concurrency == 6
+
+
+def test_load_settings_max_tool_concurrency_clamped(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_args: Namespace,
+):
+    """无效值回落到 10；过大值钳位到 32；=1 保留；非数字回落；=0 回落。"""
+    _clear_config_env(monkeypatch)
+    monkeypatch.setattr(
+        "core.config.user_config_file",
+        lambda: tmp_path / "missing.toml",
+    )
+    # 1) 默认值 10
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.max_tool_concurrency == 10
+
+    # 2) 999 钳位到 32
+    monkeypatch.setenv("COCO_MAX_TOOL_CONCURRENCY", "999")
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.max_tool_concurrency == 32
+
+    # 3) 非数字回落到默认 10
+    monkeypatch.setenv("COCO_MAX_TOOL_CONCURRENCY", "abc")
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.max_tool_concurrency == 10
+
+    # 4) 0 / 负数回落到默认 10，再钳位
+    monkeypatch.setenv("COCO_MAX_TOOL_CONCURRENCY", "0")
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.max_tool_concurrency == 10
+
+    monkeypatch.setenv("COCO_MAX_TOOL_CONCURRENCY", "-5")
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.max_tool_concurrency == 10
+
+    # 5) 合法值 1 保留（串行模式）
+    monkeypatch.setenv("COCO_MAX_TOOL_CONCURRENCY", "1")
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.max_tool_concurrency == 1

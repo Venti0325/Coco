@@ -70,19 +70,20 @@ _MAX_TOKENS_TABLE: tuple[tuple[str, int], ...] = (
 # ── 环境变量 → 配置键映射 ────────────────────────────────────────────
 
 _ENV_MAP: dict[str, str] = {
-    "COCO_PROVIDER":          "provider",
-    "COCO_MODEL":             "model",
-    "COCO_MAX_TOKENS":        "max_tokens",
-    "COCO_EFFORT":            "effort",
-    "COCO_MAX_STEPS":         "max_steps",
-    "COCO_MAX_STEPS_COMPLEX": "max_steps_complex",
-    "COCO_FALLBACK_MODELS":   "fallback_models",   # 逗号分隔；仅 OpenRouter 生效
-    "ANTHROPIC_API_KEY":      "anthropic_api_key",
-    "ANTHROPIC_BASE_URL":     "anthropic_base_url",
-    "OPENAI_API_KEY":         "openai_api_key",
-    "OPENAI_BASE_URL":        "openai_base_url",
-    "OPENROUTER_API_KEY":     "openrouter_api_key",
-    "OPENROUTER_BASE_URL":    "openrouter_base_url",
+    "COCO_PROVIDER":             "provider",
+    "COCO_MODEL":                "model",
+    "COCO_MAX_TOKENS":           "max_tokens",
+    "COCO_EFFORT":               "effort",
+    "COCO_MAX_STEPS":            "max_steps",
+    "COCO_MAX_STEPS_COMPLEX":    "max_steps_complex",
+    "COCO_MAX_TOOL_CONCURRENCY": "max_tool_concurrency",
+    "COCO_FALLBACK_MODELS":      "fallback_models",   # 逗号分隔；仅 OpenRouter 生效
+    "ANTHROPIC_API_KEY":         "anthropic_api_key",
+    "ANTHROPIC_BASE_URL":        "anthropic_base_url",
+    "OPENAI_API_KEY":            "openai_api_key",
+    "OPENAI_BASE_URL":           "openai_base_url",
+    "OPENROUTER_API_KEY":        "openrouter_api_key",
+    "OPENROUTER_BASE_URL":       "openrouter_base_url",
 }
 
 
@@ -123,7 +124,15 @@ def _read_toml(path: Path) -> dict:
 
     flat: dict = {}
     # 顶层标量字段
-    for key in ("provider", "model", "max_tokens", "effort", "max_steps", "max_steps_complex"):
+    for key in (
+        "provider",
+        "model",
+        "max_tokens",
+        "effort",
+        "max_steps",
+        "max_steps_complex",
+        "max_tool_concurrency",
+    ):
         if key in data:
             flat[key] = data[key]
     # 顶层列表字段
@@ -153,7 +162,15 @@ def _from_cli(args: Namespace) -> dict:
 
     --api-key / --base-url 不区分 provider，直接作为最高优先级。
     """
-    _FIELDS = ("provider", "model", "max_tokens", "api_key", "base_url", "effort")
+    _FIELDS = (
+        "provider",
+        "model",
+        "max_tokens",
+        "api_key",
+        "base_url",
+        "effort",
+        "max_tool_concurrency",
+    )
     result: dict = {}
     for field in _FIELDS:
         val = getattr(args, field, None)
@@ -217,6 +234,12 @@ def _safe_int(val, fallback: int) -> int:
         return n if n > 0 else fallback
     except (TypeError, ValueError):
         return fallback
+
+
+def _clamp_concurrency(val, fallback: int = 10) -> int:
+    """钳位并发上限到 [1, 32]；无效值回落到默认。"""
+    n = _safe_int(val, fallback)
+    return max(1, min(n, 32))
 
 
 def _validate_effort(val) -> str | None:
@@ -286,6 +309,7 @@ def load_settings(
 
     max_steps = _safe_int(_pick("max_steps"), 10)
     max_steps_complex = _safe_int(_pick("max_steps_complex"), 20)
+    max_tool_concurrency = _clamp_concurrency(_pick("max_tool_concurrency"), 10)
 
     # 6) fallback_models —— TOML 列表或环境变量逗号分隔；仅在 OpenRouter 路径生效
     raw_fallback = _pick("fallback_models")
@@ -301,6 +325,7 @@ def load_settings(
         max_steps=max_steps,
         max_steps_complex=max_steps_complex,
         fallback_models=fallback_models,
+        max_tool_concurrency=max_tool_concurrency,
     )
 
 
