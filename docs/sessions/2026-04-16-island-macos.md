@@ -180,7 +180,7 @@ $ python -c "from core.island import DynamicIsland, _MacOSIslandBackend, _choose
 - Linux Wayland 下 tkinter 的 `_HAS_TK=True` 但可能无 display —— 现有 `_run()` 已有 `try/except` 兜底，本 PR 不碰
 - `COCO_NO_ISLAND` 没在 README / `.env.example` 宣传 —— 后续补
 
-### 2026-04-17 — Review 反馈修复（PR #2 comment）
+### 2026-04-17 — Review 反馈轮 1（PR #2 comment 1）
 
 Review 指出两个真实问题：
 
@@ -202,3 +202,35 @@ Review 指出两个真实问题：
 **测试脚手架调整**：`_fake_tty_stdout(written, *, isatty=True)` helper 给假 stdout 加 `isatty()` 方法；所有原有 title 相关测试改为 start() 前 patch stdout（因为 `_title_enabled` 快照在 start() 时）。
 
 **回归**：`pytest tests/` → **165 passed**（原 163 + 新增 2）。
+
+### 2026-04-17 — Review 反馈轮 2（PR #2 comment 2）
+
+Review 指出 "done 态持久化" 修复**新引入的一个回归**：
+
+> `main.py:357-370` 失败路径先调 `island.notify(..., error=True)`，但 `finally` 里无条件再调 `set_working(False)`。macOS backend 现在会把标题固化成 "✓ done" 并播成功音。结果就是请求失败后通知中心弹错误通知，但终端标题最终显示 "done"、还播了成功提示音——在 "done 态持久化" 之后变成用户可见的错误状态回归。
+
+根因：`set_working(working: bool)` 的二值 API 无法区分"成功完成"和"失败收尾"。Tk backend 过去也有同样的逻辑不精确，但因为"done"是一个短暂的闪烁动画，用户很难看见；macOS 把它做成持久可见的标题后，问题才被放大到不可忽视。
+
+**修复**：扩展 API 加 `success` 关键字参数。
+
+```python
+def set_working(self, working: bool, *, success: bool = True) -> None: ...
+```
+
+- `success=True`（默认，向后兼容）→ "✓ done" + Glass.aiff，持久化到下一次 working/stop
+- `success=False` → 静默回 "Coco · idle"。**不**播 Glass（和失败语义矛盾）；**也不**主动播 Basso——错误声由 `notify(error=True)` 负责，避免双重播放
+
+改动：
+
+- `_NullIslandBackend` / `_TkIslandBackend` / `_MacOSIslandBackend` / `DynamicIsland` facade 全都加 `success` kwarg
+- Tk backend 当前暂未差异化渲染 success=False（留注释标记未来可加"✗ 错误"边框 + 静音），**不是新问题**（Tk 过去就没区分，只是不可见）
+- `main.py:_run_query` 引入 `turn_success = False` 本地变量，在 `engine.run()` 成功返回后翻 True；`finally` 里 `island.set_working(False, success=turn_success)`。对 AbortedError（用户 ESC）也传 `success=False`——"未完成"语义上等同于失败
+- 错误路径保持 `island.notify("请求失败", ..., error=True)` 在 except 分支里（先于 finally），所以声音顺序是：notify 的 Basso（如果有）→ set_working 静默 → 最终标题 idle、最终声音为错误声
+
+**新增测试**（3 条）：
+
+- `test_macos_backend_set_working_false_failure_resets_to_idle_silently` —— 失败路径标题回 idle、零 afplay
+- `test_macos_backend_set_working_false_success_plays_glass` —— 对称守护，success=True 必须播 Glass
+- `test_dynamic_island_facade_passes_success_flag` —— facade 正确透传 kwarg 到 backend
+
+**回归**：`pytest tests/` → **168 passed**（原 165 + 新增 3）。

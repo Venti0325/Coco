@@ -258,6 +258,84 @@ def test_macos_backend_skips_title_write_when_stdout_not_tty(
     assert written == [], f"expected no stdout writes, got: {written!r}"
 
 
+def test_macos_backend_set_working_false_failure_resets_to_idle_silently(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """set_working(False, success=False) 应静默回 idle：
+
+    - 标题 → "Coco · idle"（不是 "✓ done" 也不是 "✗ error"）
+    - 不播 Glass.aiff（成功音）
+    - 不播 Basso.aiff（错误音应由 notify(error=True) 负责，避免双重播放）
+
+    回归保护：main.py 的 finally 对失败路径也会调 set_working(False)。如果当成
+    成功处理，macOS 用户会看到错误通知后标题仍持久在 "✓ done"、甚至播成功音。
+    """
+    written = []
+    monkeypatch.setattr(island_mod.sys, "stdout", _fake_tty_stdout(written))
+    popen_calls = []
+    monkeypatch.setattr(
+        island_mod.subprocess, "Popen",
+        lambda args, **kw: popen_calls.append(args) or None,
+    )
+
+    b = island_mod._MacOSIslandBackend()
+    b.start()
+    b.set_working(True)
+    b.set_working(False, success=False)
+
+    osc_titles = [s for s in written if s.startswith("\033]0;")]
+    assert osc_titles, "应有 OSC 标题写入"
+    last = osc_titles[-1]
+    assert "idle" in last, f"失败收尾应回 idle，实际: {last!r}"
+    assert "✓ done" not in last, "失败路径绝不应显示 done"
+    assert "✗" not in last, "失败路径当前设计静默回 idle，不放 ✗"
+
+    # 零 afplay 调用（成功和错误声音都不应由此路径触发）
+    assert popen_calls == [], f"失败收尾不应播任何音，实际: {popen_calls!r}"
+
+
+def test_macos_backend_set_working_false_success_plays_glass(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """对称守护：success=True 路径必须播 Glass.aiff。"""
+    written = []
+    monkeypatch.setattr(island_mod.sys, "stdout", _fake_tty_stdout(written))
+    popen_calls = []
+    monkeypatch.setattr(
+        island_mod.subprocess, "Popen",
+        lambda args, **kw: popen_calls.append(args) or None,
+    )
+
+    b = island_mod._MacOSIslandBackend()
+    b.start()
+    b.set_working(True)
+    b.set_working(False)   # 默认 success=True
+
+    assert any(
+        "afplay" in a and "Glass.aiff" in " ".join(a) for a in popen_calls
+    ), f"成功收尾应播 Glass，实际 Popen: {popen_calls!r}"
+
+
+def test_dynamic_island_facade_passes_success_flag():
+    """facade 必须把 success 关键字透传给 backend。"""
+    received = {}
+
+    class _RecordingBackend:
+        available = True
+        def start(self): pass
+        def set_working(self, working, *, success=True):
+            received["working"] = working
+            received["success"] = success
+        def notify(self, *a, **kw): pass
+        def ask_permission(self, *a, **kw): return "n"
+        def stop(self): pass
+
+    with patch.object(island_mod, "_choose_backend", return_value=_RecordingBackend()):
+        island = island_mod.DynamicIsland()
+    island.set_working(False, success=False)
+    assert received == {"working": False, "success": False}
+
+
 def test_macos_backend_done_state_persists_until_next_working_or_stop(
     monkeypatch: pytest.MonkeyPatch,
 ):

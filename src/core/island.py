@@ -159,8 +159,13 @@ class _TkIslandBackend:
         if self._available:
             self._q.put(_Msg(kind="notify", title=title, body=body, error=error))
 
-    def set_working(self, working: bool) -> None:
-        """开始处理时传 True；完成时传 False，先短暂显示"✓ 完成"再回到 idle。"""
+    def set_working(self, working: bool, *, success: bool = True) -> None:
+        """开始处理时传 True；完成时传 False（``success`` 表示成功/失败结束态）。
+
+        当前 Tk UI 上 ``success`` 暂未差异化渲染（均显示绿色"完成"）。macOS backend
+        与 facade API 已区分，Tk 侧后续可加"✗ 错误"边框与静音处理。
+        """
+        _ = success   # 预留语义，当前 Tk 实现忽略
         if self._available:
             self._q.put(_Msg(kind="working" if working else "done"))
 
@@ -583,7 +588,7 @@ class _NullIslandBackend:
     def start(self) -> None:
         pass
 
-    def set_working(self, working: bool) -> None:
+    def set_working(self, working: bool, *, success: bool = True) -> None:
         pass
 
     def notify(self, title: str, body: str = "", *, error: bool = False) -> None:
@@ -629,16 +634,25 @@ class _MacOSIslandBackend:
         self._title_enabled = self._stdout_is_tty()
         self._set_term_title("Coco · idle")
 
-    def set_working(self, working: bool) -> None:
+    def set_working(self, working: bool, *, success: bool = True) -> None:
+        """进入 working / 结束到 done(success) / 结束到 idle(failure) 三档。
+
+        ``success=True``：标题 "✓ done" + Glass 提示音，持久化到下一次 working/stop
+        ``success=False``：静默回 "idle"。不播 Glass（避免和失败语义矛盾），也不主动
+        播 Basso——失败时的错误音由 ``notify(error=True)`` 负责，避免双重播放。
+        """
         if not self._started:
             return
         if working:
             self._set_term_title("Coco · working…")
-        else:
+        elif success:
             # 完成态：显示 ✓ + 提示音，标题保留到下一次 set_working(True) 或 stop()
             # 再覆盖。之前版本在同一调用里立刻回 idle，导致"done"从未可见。
             self._set_term_title("Coco · ✓ done")
             self._play_sound_async("/System/Library/Sounds/Glass.aiff")
+        else:
+            # 失败/中止：静默回 idle，不播成功音。错误声音由 notify(error=True) 负责。
+            self._set_term_title("Coco · idle")
 
     def notify(self, title: str, body: str = "", *, error: bool = False) -> None:
         if not self._started:
@@ -746,8 +760,8 @@ class DynamicIsland:
         self._backend.start()
         return self
 
-    def set_working(self, working: bool) -> None:
-        self._backend.set_working(working)
+    def set_working(self, working: bool, *, success: bool = True) -> None:
+        self._backend.set_working(working, success=success)
 
     def notify(self, title: str, body: str = "", *, error: bool = False) -> None:
         self._backend.notify(title, body, error=error)
