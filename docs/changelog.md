@@ -11,6 +11,7 @@
 
 ## 2026-04-30
 
+- **(done)** README 重写 + RELEASE_NOTES v0.1.3-alpha：把这一轮新加的能力（OpenRouter 一等公民 / 并行工具 / MCP / 三级 context engineering / Eval harness / 跨平台 island）系统写进项目首页与发布说明；环境变量表 / 斜杠命令表 / `--max-tool-concurrency` flag / Benchmark 用法都补全；项目结构图按 src/core/ 实际新增模块刷新；版本号 `0.1.2a0` → `0.1.3a0`。诚实定位 parallel 收益条件（避免简历级误导）
 - **(done)** Parallel-tools stress benchmark：新加 `stress_001_parallel_reads`（8 文件 × 4KB→20KB，prompt 强制"一个 turn 8 个 Read"），`tool_log_regex` scorer 守住批次约束。两组跑（4KB / 20KB）四次实测：8 Read 串行 tool_time **1.770→2.047 ms**，并行 **2.724→2.238 ms**。本地 SSD + 文件缓存下 Read 亚毫秒，**ThreadPool 启停 ~1ms 开销超过被并行化的工作**——本地小 Read 并行反而倒贴。但 batch 路径 100% 触发（session JSONL 1 turn × 8 Reads 直接证据）。修订 plan 末尾"收益条件矩阵"为实测公式：`max - sum - 1ms_overhead ≥ 0` → 单 tool > 2ms 才有微正收益、> 100ms 才接近线性加速。报告精度 `.2f`→`.3f`（10ms→1ms） → [sessions/2026-04-16-parallel-tools.md](sessions/2026-04-16-parallel-tools.md)
 
 ## 2026-04-16
