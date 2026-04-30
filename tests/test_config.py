@@ -190,6 +190,61 @@ def test_load_settings_openrouter_env(
     assert s.max_tokens == 32_000  # 命中 _MAX_TOKENS_TABLE 的 "anthropic/claude-sonnet-4" 前缀
 
 
+def test_load_settings_autodetect_openrouter_when_only_key_set(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_args: Namespace,
+):
+    """只设了 OPENROUTER_API_KEY 而未设 COCO_PROVIDER → 自动选 openrouter。"""
+    _clear_config_env(monkeypatch)
+    monkeypatch.setattr(
+        "core.config.user_config_file",
+        lambda: tmp_path / "missing.toml",
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-autodetect")
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.provider == Provider.OPENROUTER
+    assert s.api_key == "sk-or-autodetect"
+    # 用户没填 model → 走 OpenRouter 兜底（namespace/slug 形式，避免裸名 400）
+    assert s.model == "deepseek/deepseek-v4-pro"
+
+
+def test_load_settings_autodetect_prefers_anthropic_when_multiple_keys(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_args: Namespace,
+):
+    """多个 *_API_KEY 同时存在且未显式选 provider → 按优先序选 anthropic。"""
+    _clear_config_env(monkeypatch)
+    monkeypatch.setattr(
+        "core.config.user_config_file",
+        lambda: tmp_path / "missing.toml",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-x")
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.provider == Provider.ANTHROPIC
+    assert s.api_key == "sk-ant-x"
+
+
+def test_load_settings_explicit_provider_overrides_autodetect(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_args: Namespace,
+):
+    """显式 COCO_PROVIDER 始终优先，即使该 provider 没 key——保留原报错路径。"""
+    _clear_config_env(monkeypatch)
+    monkeypatch.setattr(
+        "core.config.user_config_file",
+        lambda: tmp_path / "missing.toml",
+    )
+    monkeypatch.setenv("COCO_PROVIDER", "anthropic")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-x")
+    s = load_settings(empty_args, workspace=tmp_path)
+    assert s.provider == Provider.ANTHROPIC
+    assert s.api_key is None
+
+
 def test_argparse_accepts_openrouter():
     """--provider openrouter 不被 argparse 拒绝。"""
     from core.main import _build_parser

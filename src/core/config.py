@@ -61,6 +61,7 @@ _MAX_TOKENS_TABLE: tuple[tuple[str, int], ...] = (
     ("openai/o3",                   16_384),
     ("openai/o4",                   16_384),
     ("google/gemini-2.5-pro",        8_192),
+    ("deepseek/deepseek-v4",        16_384),
     ("deepseek/deepseek-v3",         8_192),
     ("deepseek/deepseek-r1",         8_192),
     ("meta-llama/llama-4",           8_192),
@@ -94,11 +95,36 @@ def _defaults() -> dict:
 
     注意：不包含 max_tokens，该值由 _infer_max_tokens() 根据
     最终确定的模型名自动推断，避免固定默认值压住模型推荐值。
+
+    provider 故意不在这里硬编码——交由 merge_settings 按 *_API_KEY
+    自动探测，使"只填一个 KEY"也能直接跑通。所有 *_API_KEY 都缺时再回落
+    到 anthropic（保留原报错路径）。
+
+    model 也不在这里硬编码——若用户未指定，由 merge_settings 根据
+    最终选定的 provider 从 _AUTODETECTED_DEFAULT_MODEL 取兜底，避免把
+    anthropic 默认模型名直接喂给 openrouter 网关导致 400。
     """
-    return {
-        "provider": "anthropic",
-        "model":    "claude-sonnet-4-6",
-    }
+    return {}
+
+
+# 自动探测 provider 时的优先序：用户显式 COCO_PROVIDER / --provider /
+# TOML provider= 始终最高；这里只在用户**未指定** provider 时生效。
+_PROVIDER_AUTODETECT_ORDER = (
+    Provider.ANTHROPIC,
+    Provider.OPENROUTER,
+    Provider.OPENAI,
+)
+
+
+# 自动探测 provider 且用户也没指定 model 时的兜底模型——
+# 让"只填一个 KEY"端到端跑通，不至于把 anthropic 默认模型送进 openrouter
+# 网关拿到 400。OPENAI 不给默认（厂商太多/路由不一），由用户显式选。
+_AUTODETECTED_DEFAULT_MODEL = {
+    Provider.ANTHROPIC: "claude-sonnet-4-6",
+    # DeepSeek V4 Pro：OpenRouter 上 1M context、MoE 1.6T/49B 激活、$0.435/$0.87 per M tok
+    # （released 2026-04-24，coding/agent 任务表现强，价格低；适合做"零配置即用"默认）
+    Provider.OPENROUTER: "deepseek/deepseek-v4-pro",
+}
 
 
 def _read_toml(path: Path) -> dict:
@@ -285,10 +311,24 @@ def load_settings(
         return None
 
     # 1) provider
-    provider = Provider.from_str(_pick("provider"))
+    #    用户显式声明（CLI / 环境变量 / TOML）→ 直接采用；
+    #    都没声明 → 按 _PROVIDER_AUTODETECT_ORDER 找第一个有 *_api_key 的；
+    #    一个 key 都没有 → 回落到 anthropic，让下游报"未配置"错误（兼容旧行为）。
+    explicit_provider = _pick("provider")
+    if explicit_provider is None:
+        detected = next(
+            (p for p in _PROVIDER_AUTODETECT_ORDER
+             if _pick(f"{p.value}_api_key")),
+            None,
+        )
+        provider = detected or Provider.ANTHROPIC
+    else:
+        provider = Provider.from_str(explicit_provider)
 
     # 2) model（直接使用用户填写的值，不做别名转换）
-    model = _pick("model")
+    #    用户未填 → 按已选定 provider 取兜底；OPENAI 没兜底就保持 None，
+    #    交由下游 LLM 客户端报错（明显比静默给个错模型名好）。
+    model = _pick("model") or _AUTODETECTED_DEFAULT_MODEL.get(provider)
 
     # 3) api_key / base_url —— 必须在 max_tokens 之前算出来，
     #    这样 OpenRouter 动态查询（磁盘缓存命中时）能按正确的 base_url 分槽。
@@ -298,10 +338,12 @@ def load_settings(
     base_url = _pick("base_url") or _pick(f"{pkey}_base_url")
 
     # 4) max_tokens（各层显式值 > 按模型推断；OpenRouter 路径尊重 base_url）
+    #    model 可能为 None（openai 自动探测且用户没填）→ 推断阶段当作空串，
+    #    走 _FALLBACK_MAX_TOKENS。
     raw_max = _pick("max_tokens")
     max_tokens = _safe_int(
         raw_max,
-        _infer_max_tokens(model, provider=provider, base_url=base_url),
+        _infer_max_tokens(model or "", provider=provider, base_url=base_url),
     )
 
     # 5) effort

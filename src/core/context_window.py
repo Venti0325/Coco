@@ -27,6 +27,7 @@ _CONTEXT_WINDOW_TABLE: tuple[tuple[str, int], ...] = (
     ("openai/gpt-4",      128_000),
     ("google/gemini-2.5", 1_000_000),
     ("google/gemini",     1_000_000),
+    ("deepseek/deepseek-v4", 1_000_000),  # V4 Pro / Flash：MoE + hybrid attention，1M ctx
     ("deepseek/",         128_000),
     ("meta-llama/llama-4", 128_000),
     ("meta-llama/llama-3", 128_000),
