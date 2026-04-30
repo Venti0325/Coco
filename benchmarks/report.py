@@ -61,7 +61,7 @@ def _summary_table(runs: list[TaskRun]) -> str:
         f"| Avg turns | {avg_turns:.1f} |\n"
         f"| Avg tokens (in / out) | {avg_in:,.0f} / {avg_out:,.0f} |\n"
         f"| Avg wall clock | {avg_wall:.1f}s |\n"
-        f"| Avg tool time | {avg_tool:.2f}s |\n"
+        f"| Avg tool time | {avg_tool:.3f}s |\n"
         f"| Avg cost | ${avg_cost:.3f} |\n"
     )
 
@@ -88,7 +88,7 @@ def _task_section(r: TaskRun) -> str:
     head = (
         f"### {mark} {r.task_id} — {status} "
         f"({r.turns} turns, {r.tokens_in + r.tokens_out:,} tok, "
-        f"wall {r.wall_clock_sec:.1f}s, tool {r.tool_time_sec:.2f}s)"
+        f"wall {r.wall_clock_sec:.1f}s, tool {r.tool_time_sec:.3f}s)"
     )
     body_lines = [head, ""]
 
@@ -224,6 +224,6 @@ def summary_for_stdout(runs: list[TaskRun]) -> str:
         err = f" [{r.error}]" if r.error else ""
         lines.append(
             f"  {mark:4}  {r.task_id}  {r.turns}t  "
-            f"wall={r.wall_clock_sec:5.1f}s  tool={r.tool_time_sec:4.2f}s{err}"
+            f"wall={r.wall_clock_sec:5.1f}s  tool={r.tool_time_sec:5.3f}s{err}"
         )
     return "\n".join(lines)

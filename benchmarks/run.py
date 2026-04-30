@@ -148,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"[coco-bench] [{task.id}] {mark} "
                 f"turns={r.turns} wall={r.wall_clock_sec:.1f}s "
-                f"tool={r.tool_time_sec:.2f}s{extra}"
+                f"tool={r.tool_time_sec:.3f}s{extra}"
             )
             runs.append(r)
 

@@ -427,6 +427,49 @@ baseline 报告里每个任务都有 `wall_clock_sec`，对比两次报告得出
 
 落地于 commit `4dbefb6 feat:tool_time_ms纯工具时间指标(engine→session→harness→report贯通)`。
 
+### Stress benchmark 验证（2026-04-30，专门测并行）
+
+加了 `stress_001_parallel_reads` 任务：8 个 4KB → 20KB 文件，prompt 强制让模型 "在一个 turn 里同时 issue 8 个 Read"，scorer 用 `tool_log_regex pattern="^Read$" min_matches=6` 守住"必须真的批量"这一不变量。报告精度从 `.2f`（10ms）提升到 `.3f`（1ms）。
+
+跑了两组（先 4KB × 8 文件、后 20KB × 8 文件 = 160KB 总），每组都跑串行（`COCO_MAX_TOOL_CONCURRENCY=1`）和并行（默认 10）：
+
+| Run | Files | Tokens in | tool_time_ms | wall |
+| --- | --- | --- | --- | --- |
+| stress1 serial | 4KB × 8 | 17,960 | **1.770** | 28.9s |
+| stress1 parallel | 4KB × 8 | 17,950 | **2.724** | 13.2s |
+| stress2 serial | 20KB × 8 | 78,620 | **2.047** | 10.9s |
+| stress2 parallel | 20KB × 8 | 78,946 | **2.238** | 17.0s |
+
+session JSONL 直读确认：**每次都是 1 turn × 8 Reads 一个批次**（满足 batch path 触发条件）。
+
+**头条诚实结论**：
+
+- **8 个 Read 串行总耗时 ~2ms**——本地 SSD + 文件系统缓存让 Coco 的 Read 工具实际是亚毫秒级（即便文件 20KB）
+- **ThreadPool 启停 + 8 worker submit + as_completed 固定开销 ~1ms** —— 和被并行化的工作量级相当
+- 因此**本地小 Read 用并行反而略慢 ~1ms**（仍在测量噪声内）
+- **wall 抖动 ±50%**（10.9s vs 17.0s）和 token 数差不多的情况下出现，**全是 LLM inference 方差**——再次确认 wall 不能作为并行收益的指标
+
+正面的部分：
+- 并行批次路径**确实触发**（session JSONL 里的 8-Read assistant turn 是直接证据）
+- `tool_time_ms` 指标精度足够区分两个数字（1.770 vs 2.724 ms 区分度清晰）
+- 这次诚实测出 ThreadPool 的"baseline cost"约 1ms，是设计 `_partition_tool_calls` 时被 plan 漏掉的细节
+
+### 收益条件公式（实测后修订）
+
+并行收益 = **max(tool_elapsed) - sum(tool_elapsed)**（理论） − **~1ms ThreadPool 开销**（实测）
+
+要让左边 ≥ 右边：
+
+| 单 tool 典型 elapsed | 并行收益 |
+| --- | --- |
+| < 0.5 ms（本地小文件 Read） | **倒贴 ~1ms**（不该启用） |
+| 0.5-2 ms（中型本地文件） | 与开销相抵，wash |
+| 2-10 ms（大文件 / Grep 全库） | 微正收益 |
+| 10-100 ms（中型 MCP / WebFetch） | **明确收益**，比例随规模放大 |
+| > 100 ms（远程 / 慢 Shell） | **强收益**，接近线性加速 |
+
+理想的下一步：让 engine 在小批次（< 3 工具 OR 平均 elapsed < 1ms）时**主动放弃 ThreadPool 走串行**——避开倒贴。但当前没有先验信息可用（只能历史统计），暂存为 follow-up。
+
 ### Commits
 
 - `feat:并行工具调用(分批保序+ThreadPool+COCO_MAX_TOOL_CONCURRENCY)` (本次提交)

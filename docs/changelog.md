@@ -9,6 +9,10 @@
 
 ---
 
+## 2026-04-30
+
+- **(done)** Parallel-tools stress benchmark：新加 `stress_001_parallel_reads`（8 文件 × 4KB→20KB，prompt 强制"一个 turn 8 个 Read"），`tool_log_regex` scorer 守住批次约束。两组跑（4KB / 20KB）四次实测：8 Read 串行 tool_time **1.770→2.047 ms**，并行 **2.724→2.238 ms**。本地 SSD + 文件缓存下 Read 亚毫秒，**ThreadPool 启停 ~1ms 开销超过被并行化的工作**——本地小 Read 并行反而倒贴。但 batch 路径 100% 触发（session JSONL 1 turn × 8 Reads 直接证据）。修订 plan 末尾"收益条件矩阵"为实测公式：`max - sum - 1ms_overhead ≥ 0` → 单 tool > 2ms 才有微正收益、> 100ms 才接近线性加速。报告精度 `.2f`→`.3f`（10ms→1ms） → [sessions/2026-04-16-parallel-tools.md](sessions/2026-04-16-parallel-tools.md)
+
 ## 2026-04-16
 
 - **(done)** 灵动岛 macOS 支持（P0 崩溃修复）：`island.py` 抽出 backend 协议（`_IslandBackend` 形）；现有 tkinter 代码保持原地，类名改为 `_TkIslandBackend`；新增 `_MacOSIslandBackend`（终端标题 OSC 0 + `osascript display notification` 进通知中心 + `afplay` 系统音，`ask_permission` 抛 `NotImplementedError` 让 `PermissionChecker` 回退终端）；新增 `_NullIslandBackend` + `COCO_NO_ISLAND` env 开关；新增 `DynamicIsland` 薄 facade + `_choose_backend()` 按平台分发；`/doctor` 加 backend 状态行；零新依赖；163 tests passed → [sessions/2026-04-16-island-macos.md](sessions/2026-04-16-island-macos.md)

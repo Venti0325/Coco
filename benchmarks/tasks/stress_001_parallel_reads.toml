@@ -1,0 +1,19 @@
+id = "stress_001_parallel_reads"
+category = "stress"
+description = "Force the agent to read 8 files in one turn so the parallel batch path is exercised. Measure tool_time delta serial vs parallel."
+prompt = """Use the Read tool to read all 8 files in this workspace at once: file_001.py, file_002.py, file_003.py, file_004.py, file_005.py, file_006.py, file_007.py, file_008.py. Issue all 8 Read calls in a SINGLE assistant turn (parallel) — do NOT read them one by one. After reading, tell me which file contains the marker `NEEDLE_XYZ_TARGET`. Answer with just the filename, nothing else."""
+workspace = "stress_001_parallel_reads"
+max_turns = 4
+timeout_sec = 180
+
+[[scorers]]
+type = "answer_contains"
+value = "file_005"
+
+[[scorers]]
+type = "tool_log_regex"
+pattern = "^Read$"
+min_matches = 6
+
+[[scorers]]
+type = "no_file_modified"
