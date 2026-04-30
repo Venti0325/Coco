@@ -182,21 +182,33 @@ def _no_file_modified(
         ref_path = (workspace / ref_path).resolve()
     if not ref_path.is_dir():
         return False, f"reference not dir: {ref}"
-    diff = filecmp.dircmp(workspace, ref_path)
-    mods = _collect_diff(diff)
+    mods = _deep_diff(workspace, ref_path)
     if mods:
         return False, f"modified: {mods[:5]}"
     return True, "workspace unchanged"
 
 
-def _collect_diff(d: filecmp.dircmp) -> list[str]:
-    changes: list[str] = []
-    changes.extend(d.left_only)
-    changes.extend(d.right_only)
-    changes.extend(d.diff_files)
-    for sub in d.subdirs.values():
-        changes.extend(_collect_diff(sub))
-    return sorted(set(changes))
+def _deep_diff(left: Path, right: Path) -> list[str]:
+    """递归内容级 diff——比 ``filecmp.dircmp`` 严格。
+
+    `filecmp.dircmp` 默认 shallow（仅比 size+mtime），在 Windows 上文件系统
+    mtime 分辨率粗时，相同长度的不同内容（如 "a = 1\\n" vs "a = 2\\n"）会被
+    误判为一致。这里强制读字节比对，避开该坑。
+    """
+    diffs: set[str] = set()
+    left_files = {p.relative_to(left) for p in left.rglob("*") if p.is_file()}
+    right_files = {p.relative_to(right) for p in right.rglob("*") if p.is_file()}
+    only_left = left_files - right_files
+    only_right = right_files - left_files
+    diffs.update(str(p) for p in only_left)
+    diffs.update(str(p) for p in only_right)
+    for rel in left_files & right_files:
+        try:
+            if (left / rel).read_bytes() != (right / rel).read_bytes():
+                diffs.add(str(rel))
+        except OSError:
+            diffs.add(str(rel))   # 读不了也算异常视作有差
+    return sorted(diffs)
 
 
 def _command_succeeds(
