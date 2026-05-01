@@ -48,6 +48,8 @@ from core.tools import (
 from core.tools.base import Tool
 from core import log
 from core._keylistener import EscListener
+from core.markdown import render_markdown
+from core.streaming_markdown import StreamingMarkdownRenderer
 
 from rich.live import Live
 from rich.spinner import Spinner
@@ -371,34 +373,99 @@ def entry() -> None:
         ``session_usage`` 非空时，会在本轮成功后累加本轮 usage 并打印水位。
         """
         console = log.get_console()
-        live: Live | None = None
-        _streaming = [False]   # 是否已进入流式文本阶段
+        spinner_live: Live | None = None
+        md_live: Live | None = None
+        streamer = StreamingMarkdownRenderer()
+        text_buffer = [""]      # 累积本轮所有 text chunk；[]+nonlocal 替代品
+        _streaming = [False]    # 是否已进入流式文本阶段
 
         def _start_spinner(msg: str = "思考中…") -> None:
-            nonlocal live
+            nonlocal spinner_live
             _stop_spinner()
-            live = Live(
+            spinner_live = Live(
                 Spinner("dots", text=Text(msg, style="dim")),
                 console=console,
                 refresh_per_second=10,
                 transient=True,
             )
-            live.start()
+            spinner_live.start()
 
         def _stop_spinner() -> None:
-            nonlocal live
-            if live is not None:
-                live.stop()
-                live = None
+            nonlocal spinner_live
+            if spinner_live is not None:
+                spinner_live.stop()
+                spinner_live = None
+
+        def _stop_md_live() -> None:
+            nonlocal md_live
+            if md_live is not None:
+                md_live.stop()
+                md_live = None
+
+        def _print_segment_to_scrollback(segment: str) -> None:
+            """渲染并固化一段 markdown 到 scrollback；失败回退裸文。"""
+            if not segment or not segment.strip():
+                return
+            try:
+                console.print(render_markdown(segment))
+            except Exception:
+                console.print(segment, markup=False, end="")
+
+        def _flush_buffer_to_scrollback() -> None:
+            """工具调用边界 / turn 结束：把当前 unstable 段也固化进 scrollback。
+
+            调用后 streamer 状态清零；再来的 chunk 视为新段开始。
+            """
+            _stop_md_live()
+            unstable = text_buffer[0][len(streamer.stable_text):]
+            if unstable.strip():
+                _print_segment_to_scrollback(unstable)
+            streamer.reset()
+            text_buffer[0] = ""
 
         def _on_text_chunk(chunk: str) -> None:
+            nonlocal md_live
             if not _streaming[0]:
                 _stop_spinner()
                 _streaming[0] = True
-            if not args.print_mode:
+            text_buffer[0] += chunk
+            if args.print_mode:
+                # print 模式不流式渲染——turn 末用 result.answer 一次性渲染
+                return
+
+            try:
+                advanced, unstable = streamer.update(text_buffer[0])
+            except Exception:
+                # streamer 异常：彻底回退裸文，停 Live 不再尝试 markdown
+                _stop_md_live()
                 console.print(chunk, end="", markup=False)
+                return
+
+            if advanced:
+                # 已固化段先 stop Live（transient 会清掉 unstable 视图），
+                # 把渲染好的 advanced 一次性 print 进 scrollback
+                _stop_md_live()
+                _print_segment_to_scrollback(advanced)
+
+            if unstable:
+                try:
+                    renderable = render_markdown(unstable)
+                except Exception:
+                    renderable = Text(unstable)
+                if md_live is None:
+                    md_live = Live(
+                        renderable,
+                        console=console,
+                        refresh_per_second=10,
+                        transient=True,
+                        vertical_overflow="visible",
+                    )
+                    md_live.start()
+                else:
+                    md_live.update(renderable)
 
         def _on_tool_call(name: str, inp: dict) -> None:
+            _flush_buffer_to_scrollback()
             _stop_spinner()
             _streaming[0] = False
             preview = _tool_preview(name, inp)
@@ -406,10 +473,11 @@ def entry() -> None:
             _start_spinner("执行工具…")
 
         with EscListener(on_cancel=engine.abort) as listener:
-            # pause_fn：权限确认前先停 spinner，再暂停 ESC 监听，保证 input() 不被 Live 撕碎
+            # pause_fn：权限确认前先停 spinner + md_live，再暂停 ESC 监听，保证 input() 不被 Live 撕碎
             # resume_fn：确认完成后恢复监听并重启 spinner
             def _perms_pause() -> None:
                 _stop_spinner()
+                _stop_md_live()
                 listener.pause()
 
             def _perms_resume() -> None:
@@ -437,11 +505,13 @@ def entry() -> None:
                 turn_success = True
             except AbortedError:
                 _stop_spinner()
+                _stop_md_live()
                 console.print()
                 log.warn("已中止（ESC）")
                 return False
             except Exception as exc:
                 _stop_spinner()
+                _stop_md_live()
                 log.error(f"请求失败: {LLMClient.error_message(exc)}")
                 try:
                     island.notify("请求失败", LLMClient.error_message(exc), error=True)
@@ -450,6 +520,7 @@ def entry() -> None:
                 return False
             finally:
                 _stop_spinner()
+                _stop_md_live()
                 perms.pause_fn = None
                 perms.resume_fn = None
                 try:
@@ -458,9 +529,21 @@ def entry() -> None:
                     pass
 
         if args.print_mode:
-            print(result.answer, end="" if result.answer.endswith("\n") else "\n")
+            # print 模式：拿完整 answer 一次性渲染（非 tty 时 rich 自动 strip 颜色）
+            if result.answer:
+                if console.is_terminal:
+                    try:
+                        console.print(render_markdown(result.answer))
+                    except Exception:
+                        print(result.answer, end="" if result.answer.endswith("\n") else "\n")
+                else:
+                    # 被管道/重定向：保留原始 markdown 文本（rich 渲染产物含 box drawing
+                    # 不利于二次处理；脚本场景里 raw markdown 更友好）
+                    print(result.answer, end="" if result.answer.endswith("\n") else "\n")
         else:
-            # 流式已逐块打印，只补一个收尾换行
+            # 流式期间 unstable 段还在 Live 区里——必须 flush 到 scrollback
+            # 否则 Live transient 撤掉后这段就没了
+            _flush_buffer_to_scrollback()
             console.print()
 
         if session_store is not None:
