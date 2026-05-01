@@ -18,6 +18,7 @@ import pytest
 
 from core import openrouter_models
 from core.openrouter_models import (
+    _CACHE_PARSER_VERSION,
     _parse_models_payload,
     _read_disk,
     _save_disk,
@@ -79,6 +80,56 @@ def test_parse_does_not_use_context_length_as_max_tokens():
     out = _parse_models_payload(payload)
     assert out == {"anthropic/claude-opus-4": 32_000}
     assert 200_000 not in out.values()
+
+
+def test_parse_caps_when_mct_equals_context_length():
+    """sanity check: API 返回 mct == ctx 时（如 kimi-k2.6 ctx=mct=262142）
+    实际是"无独立输出 cap"——直接用会让 max_tokens 吃光 context 然后任何
+    input 都让总长超 ctx 报 400。本 parser 应自动 cap 到 min(32K, ctx//4)。
+    """
+    payload = {
+        "data": [
+            {
+                "id": "moonshotai/kimi-k2.6",
+                "context_length": 262_142,
+                "top_provider": {"max_completion_tokens": 262_142},
+            },
+        ]
+    }
+    out = _parse_models_payload(payload)
+    # ctx//4 = 65535, min(32K, 65535) = 32K
+    assert out == {"moonshotai/kimi-k2.6": 32_768}
+
+
+def test_parse_caps_when_mct_above_80pct_of_context():
+    """阈值 ≥ 80% ctx 都视为"无独立 cap"，触发 sanity-cap。"""
+    payload = {
+        "data": [
+            {
+                "id": "weird/model",
+                "context_length": 100_000,
+                "top_provider": {"max_completion_tokens": 85_000},  # 85% of ctx
+            },
+        ]
+    }
+    out = _parse_models_payload(payload)
+    # ctx//4 = 25_000, min(32K, max(8K, 25K)) = 25_000
+    assert out == {"weird/model": 25_000}
+
+
+def test_parse_keeps_legitimate_separate_mct():
+    """mct < 80% ctx 是正常配置（API 真有独立输出 cap）→ 保留原值。"""
+    payload = {
+        "data": [
+            {
+                "id": "deepseek/deepseek-v4-pro",
+                "context_length": 1_048_576,
+                "top_provider": {"max_completion_tokens": 384_000},  # ≈37% ctx
+            },
+        ]
+    }
+    out = _parse_models_payload(payload)
+    assert out == {"deepseek/deepseek-v4-pro": 384_000}
 
 
 def test_parse_skips_entries_without_max_completion_tokens():
@@ -182,6 +233,7 @@ def test_lookup_expired_disk_cache_triggers_refresh(
     fake_cache = openrouter_models.openrouter_models_cache_file()
     fake_cache.parent.mkdir(parents=True, exist_ok=True)
     fake_cache.write_text(json.dumps({
+        "parser_version": _CACHE_PARSER_VERSION,
         "fetched_at": 0.0,   # 1970 —— 一定过期
         "data": [
             {"id": "foo/bar", "top_provider": {"max_completion_tokens": 1000}},
@@ -202,6 +254,7 @@ def test_lookup_expired_disk_cache_refresh_fails_uses_stale(
     fake_cache = openrouter_models.openrouter_models_cache_file()
     fake_cache.parent.mkdir(parents=True, exist_ok=True)
     fake_cache.write_text(json.dumps({
+        "parser_version": _CACHE_PARSER_VERSION,
         "fetched_at": 0.0,
         "data": [
             {"id": "foo/bar", "top_provider": {"max_completion_tokens": 1000}},
@@ -253,6 +306,7 @@ def test_infer_max_tokens_uses_dynamic_for_openrouter_when_cache_warm(
     fake_cache = openrouter_models.openrouter_models_cache_file()
     fake_cache.parent.mkdir(parents=True, exist_ok=True)
     fake_cache.write_text(json.dumps({
+        "parser_version": _CACHE_PARSER_VERSION,
         "fetched_at": time.time(),
         "data": [
             {
@@ -347,6 +401,7 @@ def test_lookup_disk_only_mode_uses_fresh_disk_cache(
     fake_cache = openrouter_models.openrouter_models_cache_file()
     fake_cache.parent.mkdir(parents=True, exist_ok=True)
     fake_cache.write_text(json.dumps({
+        "parser_version": _CACHE_PARSER_VERSION,
         "fetched_at": time.time(),  # 新鲜
         "data": [
             {"id": "foo/bar", "top_provider": {"max_completion_tokens": 4242}},
@@ -369,6 +424,7 @@ def test_lookup_disk_only_mode_uses_stale_disk_cache(
     fake_cache = openrouter_models.openrouter_models_cache_file()
     fake_cache.parent.mkdir(parents=True, exist_ok=True)
     fake_cache.write_text(json.dumps({
+        "parser_version": _CACHE_PARSER_VERSION,
         "fetched_at": 0.0,  # 很旧
         "data": [
             {"id": "foo/bar", "top_provider": {"max_completion_tokens": 1000}},

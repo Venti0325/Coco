@@ -35,6 +35,10 @@ _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _CACHE_TTL_SEC = 24 * 60 * 60
 _FETCH_TIMEOUT_SEC = 3.0
 
+# Bump 后旧 cache 文件被视为不合法、强制重新 fetch；解决"解析逻辑改了但缓存里
+# 仍是旧错值"问题（典型场景：mct 等于 ctx 的 sanity-cap 修复）。
+_CACHE_PARSER_VERSION = 2
+
 _lock = threading.Lock()
 # 按 base_url 分槽的内存缓存：自定义代理返回的模型表不会污染官方缓存，反之亦然。
 _mem_caches: dict[str, dict[str, int]] = {}      # base_url → {model_id → max_tokens}
@@ -59,6 +63,13 @@ def _resolve_models_url(base_url: str | None) -> str:
 def _parse_models_payload(payload: Any) -> dict[str, int] | None:
     """从 /v1/models 的 JSON 响应里抽 model_id → max_completion_tokens 映射。
 
+    Sanity check：当某 model 的 ``max_completion_tokens`` 接近或等于
+    ``context_length`` 时，API 实际是在说"该模型没有独立输出上限"——直接
+    采用会让 max_tokens 吃光 context window，发请求时 input+output 总量
+    超 context length 报 400（典型例子：kimi-k2.6 ctx=262142 mct=262142）。
+    阈值 ≥ 80% ctx 视为"无真实独立 cap"，cap 到 ``min(32K, ctx // 4)``：
+    32K 对绝大多数 coding / agent 输出足够、ctx 1/4 给 input 留 75% 空间。
+
     只保留整数且 > 0 的条目。
     """
     if not isinstance(payload, dict):
@@ -73,15 +84,25 @@ def _parse_models_payload(payload: Any) -> dict[str, int] | None:
         mid = m.get("id")
         if not isinstance(mid, str) or not mid:
             continue
+        ctx = m.get("context_length")
         top = m.get("top_provider") or {}
         mct = top.get("max_completion_tokens") if isinstance(top, dict) else None
-        if isinstance(mct, int) and mct > 0:
-            out[mid] = mct
+        if not (isinstance(mct, int) and mct > 0):
+            continue
+        # 当 mct ≈ ctx → 没有独立输出 cap，自己 fallback 到合理小值
+        if isinstance(ctx, int) and ctx > 0 and mct >= int(ctx * 0.8):
+            mct = min(32_768, max(8_192, ctx // 4))
+        out[mid] = mct
     return out if out else None
 
 
 def _read_disk(base_url: str | None = None) -> tuple[dict[str, int], float] | None:
-    """读本地缓存文件（按 base_url 分文件），返回 (models_dict, fetched_at_epoch)。失败返回 None。"""
+    """读本地缓存文件（按 base_url 分文件），返回 (models_dict, fetched_at_epoch)。
+
+    若 cache 的 ``parser_version`` 与当前 ``_CACHE_PARSER_VERSION`` 不匹配（或
+    缺字段），视为不合法、返回 None；会触发上层重新 fetch 后写入带新 version
+    的 cache。失败也返回 None。
+    """
     path = openrouter_models_cache_file(base_url)
     if not path.is_file():
         return None
@@ -89,14 +110,18 @@ def _read_disk(base_url: str | None = None) -> tuple[dict[str, int], float] | No
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(data, dict):
+        return None
+    cached_version = data.get("parser_version")
+    if cached_version != _CACHE_PARSER_VERSION:
+        return None  # 旧 cache 版本不兼容，强制重新 fetch
     parsed = _parse_models_payload(data)
     if parsed is None:
         return None
     fetched_at = 0.0
-    if isinstance(data, dict):
-        raw_ts = data.get("fetched_at")
-        if isinstance(raw_ts, (int, float)):
-            fetched_at = float(raw_ts)
+    raw_ts = data.get("fetched_at")
+    if isinstance(raw_ts, (int, float)):
+        fetched_at = float(raw_ts)
     return parsed, fetched_at
 
 
@@ -124,11 +149,16 @@ def _fetch_remote(base_url: str | None = None) -> dict[str, int] | None:
 
 
 def _save_disk(models: dict[str, int], base_url: str | None = None) -> None:
-    """把内存映射写回磁盘（按 base_url 分文件）。失败静默——缓存只是优化，不写也能跑。"""
+    """把内存映射写回磁盘（按 base_url 分文件）。失败静默——缓存只是优化，不写也能跑。
+
+    写入时附带 ``parser_version`` 标识当前 ``_parse_models_payload`` 的语义版本；
+    解析逻辑改动后 bump 这个常量即可让旧 cache 自动失效。
+    """
     path = openrouter_models_cache_file(base_url)
     try:
         ensure_dir(path.parent)
         payload = {
+            "parser_version": _CACHE_PARSER_VERSION,
             "fetched_at": time.time(),
             "data": [
                 {"id": mid, "top_provider": {"max_completion_tokens": mt}}
