@@ -368,9 +368,15 @@ def _next_mode(current: str) -> str:
 
 
 def _mode_toolbar_text(mode: str) -> list[tuple[str, str]] | None:
-    """底部 toolbar 内容：default 模式不显示，其他模式显示 hint。
+    """底部 toolbar 内容；按当前模式给不同提示。
 
-    返回 prompt_toolkit FormattedText 兼容格式 `[(style, text), ...]`。
+    - **default**：显示 dim 灰色快捷键 hint（shift+tab 切模式 / /model 换模型）
+      ——让用户知道有哪些操作可用，不抢主视觉
+    - **acceptEdits**：magenta 强调当前已开启 accept edits + cycle hint
+    - **plan**：cyan 强调当前在 plan 模式 + cycle hint
+
+    返回 prompt_toolkit FormattedText 兼容格式 `[(style, text), ...]`，或 None
+    表示不显示 toolbar。
     """
     if mode == _MODE_ACCEPT_EDITS:
         return [("fg:ansimagenta", "▸▸ accept edits on "),
@@ -378,7 +384,9 @@ def _mode_toolbar_text(mode: str) -> list[tuple[str, str]] | None:
     if mode == _MODE_PLAN:
         return [("fg:ansicyan", "▸▸ plan mode "),
                 ("fg:ansibrightblack", "(shift+tab to cycle)")]
-    return None  # default 不显示，干净的 prompt
+    # default 模式：dim 灰色一行 hint，提示如何切模式 / 切模型
+    return [("fg:ansibrightblack",
+             "shift+tab: cycle modes · /model: switch model · /help: more")]
 
 
 # ── git 分支检测（rprompt 用） ────────────────────────────────────────

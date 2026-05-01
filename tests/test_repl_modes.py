@@ -59,9 +59,13 @@ def test_mode_cycle_visits_all_three():
 # ── _mode_toolbar_text 文案 ──────────────────────────────────────────
 
 
-def test_toolbar_default_returns_none():
-    """default 模式不显示 toolbar——保持干净 prompt。"""
-    assert _mode_toolbar_text(_MODE_DEFAULT) is None
+def test_toolbar_default_shows_shortcut_hint():
+    """default 模式显示 dim 快捷键 hint（shift+tab / /model）。"""
+    text = _mode_toolbar_text(_MODE_DEFAULT)
+    assert text is not None
+    flat = "".join(s for _, s in text)
+    assert "shift+tab" in flat.lower()
+    assert "/model" in flat
 
 
 def test_toolbar_accept_edits_has_hint():
