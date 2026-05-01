@@ -394,10 +394,46 @@ def _cmd_init(ctx: CommandContext, args: str) -> None:
     ctx.state.post_run_callback = _post_init
 
 
+# 选项是 4 元组：(model_id, 显示名, 简介, 价格字符串)。价格独立成列方便
+# picker 渲染时纵向对齐（之前混在 desc 里 "$x/$y per Mtok" 的尾巴各家不齐）。
+# 价格调研基准：2026-05-01 OpenRouter / 各厂直连官方价。
+_MODEL_OPTIONS_BY_PROVIDER: dict[str, list[tuple[str, str, str, str]]] = {
+    "anthropic": [
+        ("claude-opus-4-7",   "Opus 4.7",    "最强推理 · 异步长任务",   "$5/$25 per Mtok"),
+        ("claude-sonnet-4-6", "Sonnet 4.6",  "推荐日常使用 · 1M ctx",   "$3/$15 per Mtok"),
+        ("claude-opus-4-6",   "Opus 4.6",    "上代 Opus",                "$15/$75 per Mtok"),
+        ("claude-sonnet-4-5", "Sonnet 4.5",  "上代 Sonnet",             "$3/$15 per Mtok"),
+        ("claude-3-5-haiku",  "Haiku 3.5",   "最快最省",                 "$0.8/$4 per Mtok"),
+    ],
+    # OpenRouter 上各厂 2026-05 当前旗舰；不一一列举 300+ 全表，
+    # 想用列表外的模型用 /model <namespace/slug> 直接传入。
+    "openrouter": [
+        ("anthropic/claude-opus-4.7",       "Claude Opus 4.7",  "Anthropic 旗舰 · 1M ctx", "$5/$25 per Mtok"),
+        ("anthropic/claude-sonnet-4.6",     "Claude Sonnet 4.6","Anthropic 日常之选",      "$3/$15 per Mtok"),
+        ("deepseek/deepseek-v4-pro",        "DeepSeek V4 Pro",  "MoE 1.6T/49B · 1M ctx",   "$0.44/$0.87 per Mtok"),
+        ("deepseek/deepseek-v4-flash",      "DeepSeek V4 Flash","MoE 284B/13B · 1M ctx",   "$0.14/$0.28 per Mtok"),
+        ("moonshotai/kimi-k2.6",            "Kimi K2.6",        "Moonshot · 256K ctx",     "$0.60/$2.80 per Mtok"),
+        ("minimax/minimax-m2.7",            "MiniMax M2.7",     "MiniMax · 196K ctx",      "$0.30/$1.20 per Mtok"),
+        ("z-ai/glm-5.1",                    "GLM 5.1",          "Z.ai 旗舰",                "$1.05/$3.50 per Mtok"),
+        ("openai/gpt-5.5",                  "GPT-5.5",          "OpenAI frontier · 1M ctx", "$5/$30 per Mtok"),
+        ("google/gemini-3.1-pro-preview",   "Gemini 3.1 Pro",   "Google · 1M ctx",          "$2/$12 per Mtok"),
+        ("x-ai/grok-4.20",                  "Grok 4.20",        "xAI · 2M ctx",             "$2/$6 per Mtok"),
+    ],
+    "openai": [
+        ("gpt-5.5",      "GPT-5.5",      "frontier · 1M ctx",      "$5/$30 per Mtok"),
+        ("gpt-5",        "GPT-5",        "上代 frontier",          "$1.25/$10 per Mtok"),
+        ("gpt-4o",       "GPT-4o",       "上代日常",                "$2.5/$10 per Mtok"),
+        ("o3-mini",      "o3 Mini",      "小型推理",                "$1.1/$4.4 per Mtok"),
+    ],
+}
+
+
 def _cmd_model(ctx: CommandContext, args: str) -> None:
     """查看或切换模型。
 
-    有参数时直接切换；无参数且 provider=anthropic 时展示交互式选择列表。
+    无参数：弹交互式列表（按当前 provider 给出 curated 选项 + ↑↓ + 数字键 + Enter）。
+    有参数：直接切换为传入的模型名（不在 curated 列表也行）。
+    prompt_toolkit 缺失 → 退化成"显示当前 + 提示用 /model <名称>"。
     """
     from .config import _infer_max_tokens
 
@@ -412,22 +448,23 @@ def _cmd_model(ctx: CommandContext, args: str) -> None:
     if args.strip():
         model = args.strip()
         max_t = _infer_max_tokens(
-        model,
-        provider=ctx.settings.provider,
-        allow_remote_fetch=True,
-        base_url=ctx.settings.base_url,
-    )
+            model,
+            provider=ctx.settings.provider,
+            allow_remote_fetch=True,
+            base_url=ctx.settings.base_url,
+        )
         client.set_model(model, max_t)
         log.info(f"已切换模型为 [bold]{model}[/bold]  (max_tokens={max_t:,})")
         return
 
-    # 非 Anthropic → 纯文本提示
-    if ctx.settings.provider.value != "anthropic":
+    provider_key = ctx.settings.provider.value
+    options = _MODEL_OPTIONS_BY_PROVIDER.get(provider_key, [])
+    if not options:
         log.info(f"当前模型：{current}")
-        log.dim(f"  使用 /model <名称> 切换（provider={ctx.settings.provider.value}）")
+        log.dim(f"  使用 /model <名称> 切换（provider={provider_key} 暂无 curated 列表）")
         return
 
-    # Anthropic → prompt_toolkit 交互选择
+    # prompt_toolkit Application 交互选择；缺失时退化纯文本
     try:
         from prompt_toolkit import Application
         from prompt_toolkit.key_binding import KeyBindings
@@ -436,25 +473,65 @@ def _cmd_model(ctx: CommandContext, args: str) -> None:
         from prompt_toolkit.layout.controls import FormattedTextControl
     except ImportError:
         log.info(f"当前模型：{current}")
-        log.dim("  使用 /model <名称> 直接切换（prompt_toolkit 未安装，无法显示列表）")
+        log.dim("  prompt_toolkit 未安装，无法显示列表；用 /model <名称> 直接切换")
+        for name, label, info, price in options:
+            log.dim(f"    · {name} — {label}：{info} · {price}")
         return
 
-    # (model_name, label, description)
-    _OPTIONS = [
-        ("claude-sonnet-4-6", "Sonnet 4.6",  "推荐日常使用 · $3/$15 per Mtok"),
-        ("claude-opus-4-6",   "Opus 4.6",    "最强推理，复杂任务 · $15/$75 per Mtok"),
-        ("claude-sonnet-4-5", "Sonnet 4.5",  "上代 Sonnet · $3/$15 per Mtok"),
-        ("claude-3-5-haiku",  "Haiku 3.5",   "最快最省，简单任务 · $0.8/$4 per Mtok"),
-    ]
+    _OPTIONS = options
 
     cursor = [0]
-    for i, (name, _, _) in enumerate(_OPTIONS):
+    for i, (name, _, _, _) in enumerate(_OPTIONS):
         if name == current:
             cursor[0] = i
             break
 
     result: list[str | None] = [None]
-    max_label = max(len(label) for _, label, _ in _OPTIONS)
+    # 字符显示宽度（中文 / em dash 算 2 cell）—— ljust 用字符数会让中英混排
+    # 列对不齐。简单起见用 _visual_width 算 cell 数后手动补空格。
+    def _visual_width(s: str) -> int:
+        # ASCII / em dash 算 1，CJK / 全角字符算 2，emoji 大致算 2
+        w = 0
+        for ch in s:
+            cp = ord(ch)
+            if cp < 0x80:
+                w += 1
+            elif 0x4E00 <= cp <= 0x9FFF or 0x3000 <= cp <= 0x33FF or 0xFF00 <= cp <= 0xFFEF:
+                w += 2
+            else:
+                w += 1  # 大多数其他 BMP 字符按 1 cell；不严格但足够 picker 使用
+        return w
+
+    def _pad_to(s: str, target_width: int) -> str:
+        return s + " " * max(0, target_width - _visual_width(s))
+
+    def _pad_left_to(s: str, target_width: int) -> str:
+        """右对齐：左侧补空格到目标宽度。"""
+        return " " * max(0, target_width - _visual_width(s)) + s
+
+    _PRICE_SUFFIX = " per Mtok"
+
+    def _align_price(price: str, num_width: int) -> str:
+        """把 "$X/$Y per Mtok" 的数字段右对齐，让 'per Mtok' 在同列收尾。
+
+        例：max_num_width=11 时
+          '$0.44/$0.87' → '$0.44/$0.87 per Mtok'
+          '$5/$30'      → '     $5/$30 per Mtok'
+          '$2/$6'       → '      $2/$6 per Mtok'
+        """
+        if _PRICE_SUFFIX in price:
+            nums, _, _suffix = price.partition(_PRICE_SUFFIX)
+            return _pad_left_to(nums, num_width) + _PRICE_SUFFIX
+        return price
+
+    # 三列宽度（label / info / price 列基线宽度，方便所有项纵向对齐）
+    label_width = max(_visual_width(label) for _, label, _, _ in _OPTIONS) + 3  # + " ✔"
+    info_width = max(_visual_width(info) for _, _, info, _ in _OPTIONS)
+    # price 数字段最大宽度（不含 " per Mtok" 后缀）；用于右对齐让后缀成同列
+    price_num_width = max(
+        _visual_width(p.partition(_PRICE_SUFFIX)[0])
+        for _, _, _, p in _OPTIONS
+    )
     kb = KeyBindings()
 
     @kb.add("up")
@@ -481,22 +558,33 @@ def _cmd_model(ctx: CommandContext, args: str) -> None:
 
     def _tokens():
         t: list = [
-            ("bold ansibrightcyan", "  选择模型 / Select model\n"),
-            ("ansigray", "  ↑↓ 移动  · 数字键直选  · ↵ 确认  · ESC 取消\n\n"),
+            ("bold fg:ansicyan", f"  选择模型 / Select model  "),
+            ("fg:ansibrightblack", f"(provider={provider_key})\n"),
+            ("fg:ansibrightblack", "  ↑↓ 移动 · 数字键直选 · Enter 确认 · ESC 取消\n\n"),
         ]
-        for i, (name, label, desc) in enumerate(_OPTIONS):
+        for i, (name, label, info, price) in enumerate(_OPTIONS):
             is_cur = i == cursor[0]
             is_active = name == current
-            ptr = "❯" if is_cur else " "
-            sty = "ansibrightcyan" if is_cur else ""
+            ptr = "▶" if is_cur else " "
+            sty = "bold fg:ansicyan" if is_cur else ""
             chk = " ✔" if is_active else ""
-            padded = (label + chk).ljust(max_label + 3)
-            t.append((sty, f"  {ptr} {i + 1}. {padded}"))
-            t.append(("ansigray", desc + "\n"))
+            label_with_chk = label + chk
+            label_padded = _pad_to(label_with_chk, label_width)
+            info_padded = _pad_to(info, info_width)
+            price_aligned = _align_price(price, price_num_width)
+            # 三列：label（高亮当前选项色）/ info（dim）/ price（dim，数字右对齐）
+            t.append((sty, f"  {ptr} {i + 1}. {label_padded}"))
+            t.append(("fg:ansibrightblack", f"  {info_padded}  {price_aligned}\n"))
         return t
 
     app: Application = Application(
-        layout=Layout(Window(FormattedTextControl(_tokens))),
+        layout=Layout(
+            Window(
+                FormattedTextControl(_tokens),
+                # 否则光标停在 layout 第一个 cell（"选"字反色块），同 session picker
+                always_hide_cursor=True,
+            )
+        ),
         key_bindings=kb,
         full_screen=False,
     )

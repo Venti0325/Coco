@@ -883,8 +883,7 @@ def entry() -> None:
             spinner_text = (
                 Text(msg, style="dim")
                 + Text("   ", style="dim")
-                + Text("(esc to cancel · shift+tab to switch mode)",
-                       style="bright_black")
+                + Text("(esc to cancel)", style="bright_black")
             )
             spinner_live = Live(
                 Spinner("dots", text=spinner_text),
