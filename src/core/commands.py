@@ -104,7 +104,8 @@ def _cmd_history(ctx: CommandContext, args: str) -> None:
         return
     for i, m in enumerate(lst, start=1):
         sid_short = m.session_id[:12] + "…"
-        log.dim(f"  {i}. [{sid_short}] {m.title} · {m.message_count} 条")
+        # 转义开方括号防止 rich 把 sid 当 markup tag 解释
+        log.dim(f"  {i}. \\[{sid_short}] {m.title} · {m.message_count} 条")
 
 
 def _cmd_resume(ctx: CommandContext, args: str) -> None:
@@ -112,15 +113,23 @@ def _cmd_resume(ctx: CommandContext, args: str) -> None:
     if not lst:
         log.dim("  （没有可恢复的会话）")
         return
-    if not args.strip():
-        _cmd_history(ctx, "")
-        log.dim("  用法: /resume <序号或 session_id 前缀>")
-        return
 
-    sid = _resolve_session_id(args, lst)
-    if sid is None:
-        log.warn("未找到对应会话。")
-        return
+    if not args.strip():
+        # 不带参数 → 弹交互式选择器（与 CLI 的 `coco --resume` 行为一致）。
+        # lazy import 避免循环依赖。
+        try:
+            from core.main import _pick_session_interactively
+            sid = _pick_session_interactively(ctx.workspace)
+        except Exception:
+            sid = None
+        if sid is None:
+            log.dim("已取消。")
+            return
+    else:
+        sid = _resolve_session_id(args, lst)
+        if sid is None:
+            log.warn("未找到对应会话。")
+            return
 
     if sid == ctx.state.session_store.session_id:
         log.dim("  已在该会话中。")

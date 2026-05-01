@@ -269,6 +269,107 @@ def _render_history_to_scrollback(
         # 其他 role（system / tool 等）跳过
 
 
+# ── 会话恢复 ─────────────────────────────────────────────────────────
+
+# argparse --resume 没带参数时占位的 sentinel；后续逻辑识别此值 → 弹交互列表
+_RESUME_PICK_SENTINEL = "__pick__"
+
+
+def _pick_session_interactively(workspace: Path) -> str | None:
+    """列出已保存的会话，让用户输入序号或 session_id 前缀选择。
+
+    返回选定的 session_id；用户取消（空输入 / EOF / 列表为空）返回 None。
+    仅适用于 stdin 是 tty 的交互场景；非 tty 时 caller 应自行规避。
+    """
+    sessions = SessionStore.list_sessions(workspace)
+    if not sessions:
+        log.dim("当前工作区暂无已保存会话。")
+        return None
+
+    log.info("可恢复的会话：")
+    for i, m in enumerate(sessions, start=1):
+        sid_short = m.session_id[:12] + "…"
+        # rich 会把 [xxx] 当 markup tag 解释（unknown tag 静默吞掉）。
+        # 只需转义开方括号；右括号在 rich markup 里只在 tag 内有意义。
+        log.dim(f"  {i}. \\[{sid_short}] {m.title} · {m.message_count} 条")
+
+    log.info("")
+    try:
+        line = input("选择（序号 / id 前缀，回车取消）: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        log.info("")
+        return None
+    if not line:
+        return None
+
+    # 1. 纯数字 + 在序号范围内 → 用作 1-based 序号（最常见的"列表选择"行为）
+    # 2. 否则一律视为 session_id 前缀匹配——这同时处理了 UUID hex 前缀恰好
+    #    全是数字（约 2% 概率）的情况，避免被错误地当成"超出范围的序号"。
+    if line.isdigit():
+        idx = int(line) - 1
+        if 0 <= idx < len(sessions):
+            return sessions[idx].session_id
+
+    needle = line.lower()
+    for m in sessions:
+        if m.session_id.lower().startswith(needle):
+            return m.session_id
+
+    if line.isdigit():
+        log.warn(f"序号 {line} 超出范围（共 {len(sessions)} 个会话），且无 id 前缀匹配。")
+    else:
+        log.warn(f"未找到 id 以 {line!r} 开头的会话。")
+    return None
+
+
+def _load_or_create_session(
+    args: argparse.Namespace,
+    workspace: Path,
+    settings: AppSettings,
+) -> tuple[list[dict], "SessionStore", bool]:
+    """统一的"恢复历史会话 or 新建"逻辑，给一次性模式和 REPL 模式复用。
+
+    返回 ``(chat_messages, session_store, resumed)``：
+
+    - ``args.resume`` 为 None → 新会话，``resumed=False``
+    - ``args.resume`` 是 sentinel (``--resume`` 不带参数) → 弹交互列表选
+      （仅 REPL 模式合理；一次性模式下打印帮助并退出，因 -p 无 stdin）
+    - ``args.resume`` 是真实 id → 加载；找不到则警告后回落新会话
+
+    打印 "已恢复 N 条消息" 一行作为 resume 标识——一次性模式 caller 选择
+    是否额外回放历史到 scrollback；REPL 模式 caller 应回放。
+    """
+    target = args.resume
+    one_shot = bool(args.prompt)
+
+    if target == _RESUME_PICK_SENTINEL:
+        if one_shot:
+            log.error(
+                "一次性模式 (-p / 直接传 prompt) 下 --resume 必须给 session_id；"
+                "先运行 `coco` 进入 REPL，用 /history 查看可用会话。"
+            )
+            sys.exit(2)
+        target = _pick_session_interactively(workspace)
+        if target is None:
+            log.dim("已取消恢复，启动新会话。")
+            target = None  # 走下面的"新会话"路径
+
+    if target:
+        _meta, loaded = SessionStore.load_session(target, workspace)
+        if loaded or _meta:
+            log.dim(
+                f"已恢复会话 {target[:12]}…（{len(loaded)} 条消息）"
+            )
+            return (
+                loaded,
+                SessionStore(workspace, settings.model, session_id=target),
+                True,
+            )
+        log.warn(f"未找到会话 {target!r}，已启动新会话。")
+
+    return [], SessionStore(workspace, settings.model), False
+
+
 # ── Token 用量显示 ────────────────────────────────────────────────────
 
 def _print_turn_usage(
@@ -334,8 +435,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--resume",
+        nargs="?",
+        const=_RESUME_PICK_SENTINEL,
+        default=None,
         metavar="SESSION_ID",
-        help="交互模式下从该会话 ID 恢复 JSONL 历史",
+        help=(
+            "恢复 JSONL 历史会话；带 SESSION_ID（或前缀）直接定位，"
+            "不带参数时进入交互式列表选择。一次性模式 (-p) 下必须给 ID。"
+        ),
     )
     return p
 
@@ -789,14 +896,20 @@ def entry() -> None:
         if not _api_configured(settings):
             log.error("需要配置 API 密钥后才能执行 one-shot 请求。")
             sys.exit(1)
-        # 即便 --print 模式也保存 JSONL：benchmark harness 等外部工具
-        # 依赖此文件还原 turns / usage / tool_log。会话文件按 workspace
-        # 隔离，不会污染交互会话列表。
-        one_shot_store = SessionStore(workspace, settings.model)
+        # 一次性模式也支持 --resume：让脚本/管道场景能继续之前的对话上下文。
+        # 但**不**回放历史到 stdout——会污染 pipe 消费者的 grep/jq 等下游
+        # （banner / 配置摘要已经是固有 prefix，再加完整历史就太多）。仅打印
+        # "已恢复 N 条消息" 一行作为已 resume 的视觉标识。
+        chat_messages, one_shot_store, _resumed = _load_or_create_session(
+            args, workspace, settings
+        )
+        # 即便 --print 模式也保存 JSONL：benchmark harness 等外部工具依赖此文件
+        # 还原 turns / usage / tool_log。resume 路径 session_id 沿用历史会话；
+        # 新一轮 turn 在 _run_query 末尾追加写入同一 JSONL。
         _run_query(
             _make_engine(system_prompt, workspace=workspace),
             args.prompt,
-            chat_messages=[],
+            chat_messages=chat_messages,
             session_store=one_shot_store,
             session_usage=None,
         )
@@ -805,24 +918,12 @@ def entry() -> None:
             log.error("需要配置 API 密钥；配置后可交互输入，或传入 prompt 参数。")
             sys.exit(1)
 
-        chat_messages: list = []
-        if args.resume:
-            _meta, loaded = SessionStore.load_session(args.resume, workspace)
-            if loaded or _meta:
-                chat_messages = loaded
-                session_store = SessionStore(
-                    workspace, settings.model, session_id=args.resume
-                )
-                log.dim(
-                    f"已恢复会话 {args.resume[:12]}…（{len(loaded)} 条消息）"
-                )
-                # 把历史消息回放到 scrollback；让用户视觉上能看到上次对话
-                _render_history_to_scrollback(loaded, log.get_console())
-            else:
-                log.warn(f"未找到会话 {args.resume!r}，已启动新会话。")
-                session_store = SessionStore(workspace, settings.model)
-        else:
-            session_store = SessionStore(workspace, settings.model)
+        chat_messages, session_store, resumed = _load_or_create_session(
+            args, workspace, settings
+        )
+        if resumed:
+            # 仅 REPL 模式回放历史——交互场景用户需要看到上次对话内容
+            _render_history_to_scrollback(chat_messages, log.get_console())
 
         log.dim("交互模式 — /help；exit 或 quit 退出")
         log.dim(f"  当前会话 ID: {session_store.session_id}")
