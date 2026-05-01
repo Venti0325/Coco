@@ -39,6 +39,10 @@ class ReplState:
     post_run_callback: Callable[[], None] | None = None  # 下一轮 run 结束后执行
     # 跨轮累计 token 用量——用于 auto-compact 决策与 REPL 水位显示。
     session_usage: TokenUsage = field(default_factory=TokenUsage)
+    # 权限模式："default" / "acceptEdits" / "plan"，由 Shift+Tab 或 /plan
+    # 等斜杠命令切换；底部 toolbar 显示，每轮 _run_query 前同步给
+    # PermissionChecker.set_mode 与 engine.allowed_tools 过滤
+    permission_mode: str = "default"
 
 
 @dataclass
@@ -704,6 +708,31 @@ def _cmd_mcp(ctx: CommandContext, args: str) -> None:
     log.info("")
 
 
+def _set_permission_mode(ctx: CommandContext, mode: str, label: str) -> None:
+    """统一切换 REPL 权限模式（/plan、/accept-edits、/default 共用）。"""
+    ctx.state.permission_mode = mode
+    log.info(f"模式已切换：{label}（Shift+Tab 循环切换）")
+    log.info("")
+
+
+def _cmd_plan(ctx: CommandContext, args: str) -> None:
+    """切到 plan 模式：禁止所有写操作，agent 只能读取/搜索。"""
+    _ = args
+    _set_permission_mode(ctx, "plan", "plan（只读，禁止编辑）")
+
+
+def _cmd_accept_edits(ctx: CommandContext, args: str) -> None:
+    """切到 acceptEdits 模式：写操作自动放行，不再询问。"""
+    _ = args
+    _set_permission_mode(ctx, "acceptEdits", "accept edits on（自动放行写操作）")
+
+
+def _cmd_default_mode(ctx: CommandContext, args: str) -> None:
+    """切回 default 模式：写操作弹 y/n/always 终端确认。"""
+    _ = args
+    _set_permission_mode(ctx, "default", "default（写操作需确认）")
+
+
 _COMMAND_HELP: list[tuple[str, str]] = [
     ("help", "显示本列表"),
     ("doctor", "环境诊断：检查 API 密钥、依赖、工作区等"),
@@ -715,6 +744,9 @@ _COMMAND_HELP: list[tuple[str, str]] = [
     ("compact", "压缩对话上下文：/compact 或 /compact --micro（仅裁剪早期工具结果）"),
     ("skills", "列出可用技能"),
     ("mcp", "MCP server 状态与工具列表"),
+    ("plan", "进入 plan 模式（只读，禁止编辑）；Shift+Tab 也可循环切换"),
+    ("accept-edits", "进入 accept-edits 模式（自动放行写操作）"),
+    ("default", "回到 default 模式（写操作需确认）"),
     ("workspace 或 cd", "切换工作区：/workspace <路径>"),
     ("exit 或 quit", "退出 REPL"),
 ]
@@ -731,6 +763,10 @@ _COMMANDS: dict[str, CommandHandler] = {
     "compact": _cmd_compact,
     "skills": _cmd_skills,
     "mcp": _cmd_mcp,
+    "plan": _cmd_plan,
+    "accept-edits": _cmd_accept_edits,
+    "acceptedits": _cmd_accept_edits,  # 兼容无连字符写法
+    "default": _cmd_default_mode,
     "workspace": _cmd_workspace,
     "ws": _cmd_workspace,
     "cd": _cmd_workspace,

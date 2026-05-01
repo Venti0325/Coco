@@ -127,10 +127,58 @@ class _SlashCommandCompleter(Completer):
             pass
 
 
-def _build_prompt_session() -> "PromptSession | None":  # type: ignore[type-arg]
-    """创建 prompt_toolkit 会话（含历史文件与斜杠补全）；不可用时返回 None。"""
+def _build_prompt_session(
+    repl_state=None,
+    workspace: "Path | None" = None,
+) -> "PromptSession | None":  # type: ignore[type-arg]
+    """创建 prompt_toolkit 会话。
+
+    参数：
+
+    - ``repl_state``：``ReplState`` 实例。提供后会启用：
+      - 底部 toolbar 显示当前权限模式（default 不显示，acceptEdits / plan 各有
+        提示文案 + "shift+tab to cycle" hint）
+      - Shift+Tab 键位循环模式
+      - 模式变更后调用 ``app.invalidate()`` 立即重绘 toolbar
+    - ``workspace``：当前工作区路径。提供后会启用 rprompt 显示 git 分支名
+      （per-workspace TTL 5s 缓存，避免每键入触发子进程）
+
+    两者都不传时退化为简单 PromptSession（保留 history + slash 补全）。
+    prompt_toolkit 不可用时返回 ``None``。
+    """
     if not _PT_AVAILABLE:
         return None
+
+    bottom_toolbar = None
+    rprompt = None
+    kb: "KeyBindings | None" = None
+
+    if repl_state is not None:
+        def _toolbar():
+            return _mode_toolbar_text(repl_state.permission_mode)
+
+        bottom_toolbar = _toolbar
+
+        kb = KeyBindings()
+
+        @kb.add("s-tab")
+        def _cycle_mode(event):
+            current = repl_state.permission_mode
+            repl_state.permission_mode = _next_mode(current)
+            # 强制重绘——toolbar 在下一帧拿到新模式
+            event.app.invalidate()
+
+    if workspace is not None:
+        def _rprompt():
+            branch = _get_git_branch_cached(workspace)
+            if not branch:
+                return None
+            # 反色块（cyan 背景 + black 前景）模拟截图里"rewrite-reality-..."贴在
+            # 屏幕右侧的卡片感。前后 padding 1 空格让 cell 视觉宽松。
+            return [("fg:ansiblack bg:ansicyan", f" {branch} ")]
+
+        rprompt = _rprompt
+
     try:
         ensure_dir(state_home())
         return PromptSession(
@@ -140,6 +188,9 @@ def _build_prompt_session() -> "PromptSession | None":  # type: ignore[type-arg]
             # 非斜杠输入不会触发——_SlashCommandCompleter.get_completions
             # 看到非 "/" 开头立刻 return，所以普通打字零开销。
             complete_while_typing=True,
+            bottom_toolbar=bottom_toolbar,
+            rprompt=rprompt,
+            key_bindings=kb,
         )
     except Exception:
         return None
@@ -272,6 +323,86 @@ def _render_history_to_scrollback(
                     console.print(f"[dim]↳ {name}({preview})[/dim]")
             continue
         # 其他 role（system / tool 等）跳过
+
+
+# ── REPL 模式（与 PermissionChecker.mode 对齐） ───────────────────────
+
+# 模式名常量；ReplState.permission_mode 与 PermissionChecker.mode 共用同一组值。
+_MODE_DEFAULT = "default"
+_MODE_ACCEPT_EDITS = "acceptEdits"
+_MODE_PLAN = "plan"
+
+# Shift+Tab 循环顺序：default → acceptEdits → plan → default ...
+_MODE_CYCLE: tuple[str, ...] = (_MODE_DEFAULT, _MODE_ACCEPT_EDITS, _MODE_PLAN)
+
+# Plan 模式下允许的工具集（只读核心三件套；MCP 工具默认全屏蔽，需要的话以后
+# 用 tool.is_read_only 改为运行时过滤）
+_PLAN_MODE_ALLOWED_TOOLS: frozenset[str] = frozenset({"Read", "Glob", "Grep"})
+
+
+def _next_mode(current: str) -> str:
+    """Shift+Tab 循环：返回下一个模式；未知模式回落到 default。"""
+    try:
+        idx = _MODE_CYCLE.index(current)
+    except ValueError:
+        return _MODE_DEFAULT
+    return _MODE_CYCLE[(idx + 1) % len(_MODE_CYCLE)]
+
+
+def _mode_toolbar_text(mode: str) -> list[tuple[str, str]] | None:
+    """底部 toolbar 内容：default 模式不显示，其他模式显示 hint。
+
+    返回 prompt_toolkit FormattedText 兼容格式 `[(style, text), ...]`。
+    """
+    if mode == _MODE_ACCEPT_EDITS:
+        return [("fg:ansimagenta", "▸▸ accept edits on "),
+                ("fg:ansibrightblack", "(shift+tab to cycle)")]
+    if mode == _MODE_PLAN:
+        return [("fg:ansicyan", "▸▸ plan mode "),
+                ("fg:ansibrightblack", "(shift+tab to cycle)")]
+    return None  # default 不显示，干净的 prompt
+
+
+# ── git 分支检测（rprompt 用） ────────────────────────────────────────
+
+# git branch 缓存：避免每个 keystroke 都 spawn 子进程。TTL 5s 对人感知够快、
+# 对 git 子进程压力够轻；切分支后看到状态变化的延迟最大 5s 可接受。
+_git_branch_cache: dict[str, tuple[float, str]] = {}
+_GIT_BRANCH_TTL_S = 5.0
+
+
+def _get_git_branch_cached(workspace: Path) -> str:
+    """返回当前分支名；非 git 仓 / git 不存在 / 超时 → 空字符串。
+
+    带 TTL 5s 的 per-workspace 缓存。空串与真实分支名一视同仁地缓存——避免
+    "刚 init 还没建分支" 这种短暂状态频繁 spawn 子进程。
+    """
+    import subprocess
+    import time as _time
+
+    key = str(workspace)
+    now = _time.monotonic()
+    cached = _git_branch_cache.get(key)
+    if cached and (now - cached[0]) < _GIT_BRANCH_TTL_S:
+        return cached[1]
+
+    branch = ""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(workspace),
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+            check=False,
+        )
+        if result.returncode == 0:
+            branch = result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+
+    _git_branch_cache[key] = (now, branch)
+    return branch
 
 
 # ── REPL 退出 ─────────────────────────────────────────────────────────
@@ -1093,7 +1224,9 @@ def entry() -> None:
             mcp_manager=mcp_manager,
         )
 
-        pt_session = _build_prompt_session()
+        # 把 repl_state + workspace 传给 prompt session，启用底部模式 toolbar、
+        # 右侧 git 分支 rprompt、Shift+Tab 循环模式
+        pt_session = _build_prompt_session(repl_state=repl_state, workspace=workspace)
         ctrl_c_tracker = _DoubleCtrlCExit()
 
         while True:
@@ -1177,6 +1310,15 @@ def entry() -> None:
                     continue
                 allowed_tools = set(pending_skill.allowed_tools) if pending_skill.allowed_tools else None
                 allowed_paths = list(pending_skill.paths) if pending_skill.paths else None
+
+            # 同步当前模式到 PermissionChecker；plan 模式额外把 allowed_tools
+            # 收窄成 _PLAN_MODE_ALLOWED_TOOLS（取交集，让 skill 约束仍生效）。
+            perms.set_mode(repl_state.permission_mode)
+            if repl_state.permission_mode == _MODE_PLAN:
+                if allowed_tools is None:
+                    allowed_tools = set(_PLAN_MODE_ALLOWED_TOOLS)
+                else:
+                    allowed_tools = allowed_tools & set(_PLAN_MODE_ALLOWED_TOOLS)
 
             _run_query(
                 _make_engine(
