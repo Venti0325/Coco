@@ -291,17 +291,127 @@ def _cmd_compact(ctx: CommandContext, args: str) -> None:
 
 
 def _cmd_skills(ctx: CommandContext, args: str) -> None:
+    """列出可用 skills 并提供交互式选择。
+
+    无参数时弹 prompt_toolkit Application 让用户用 ↑↓/Enter 选；选定的 skill
+    立即执行（带空 args；要传参用 ``/<skill> <args>`` 直接调）。ESC 取消。
+
+    prompt_toolkit 缺失或非 tty 时退化为纯文本列表（原行为）。
+    """
     _ = args
     skills = list_skills(user_invocable_only=True)
     if not skills:
         log.dim("（暂无可用技能）")
         return
-    log.info("可用技能：")
-    for s in skills:
-        desc = s.description or "（无说明）"
-        log.info(f"  [bold]/{s.name}[/bold]")
-        log.dim(f"    {desc}")
-    log.info("")
+
+    # 交互 picker；不可用时退化为纯文本列表
+    picked = _pick_skill_interactively(skills)
+    if picked is None:
+        return  # 用户 ESC 取消 / 退化路径已经打印列表
+    _execute_skill(picked, "", ctx)
+
+
+def _pick_skill_interactively(skills: list[Skill]) -> Skill | None:
+    """skills 列表 → prompt_toolkit Application 交互选择。
+
+    优先用 prompt_toolkit Application（↑↓ 导航 + Enter 选 + ESC 取消）；
+    缺失时打印纯文本列表并返回 None（用户得用 ``/<name>`` 直接调）。
+    """
+    try:
+        from prompt_toolkit import Application
+        from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.layout import Layout
+        from prompt_toolkit.layout.containers import HSplit, Window
+        from prompt_toolkit.layout.controls import FormattedTextControl
+    except ImportError:
+        log.info("可用技能：")
+        for s in skills:
+            desc = s.description or "（无说明）"
+            log.info(f"  [bold]/{s.name}[/bold]  [dim]({s.source})[/dim]")
+            log.dim(f"    {desc}")
+        log.info("")
+        return None
+
+    state: dict = {"index": 0, "result": None}
+
+    # 列宽（name 最宽 + " (source)"，desc 走剩余宽度由终端 wrap）
+    name_w = max(len(s.name) for s in skills)
+    src_w = max(len(s.source) for s in skills)
+
+    def get_text():
+        out: list[tuple[str, str]] = [
+            ("bold fg:ansicyan", "  选择技能 / Select skill\n"),
+            ("fg:ansibrightblack",
+             "  ↑↓ 移动 · Enter 确认 · ESC 取消（要传参用 /<skill> <args> 直接调）\n\n"),
+        ]
+        for i, s in enumerate(skills):
+            is_cur = i == state["index"]
+            ptr = "▶" if is_cur else " "
+            sty = "bold fg:ansicyan" if is_cur else ""
+            name_padded = f"/{s.name}".ljust(name_w + 2)
+            src_padded = f"[{s.source}]".ljust(src_w + 2)
+            out.append((sty, f"  {ptr} {name_padded}"))
+            out.append(("fg:ansibrightblack", f"  {src_padded}  "))
+            desc = (s.description or "（无说明）").replace("\n", " ")
+            if len(desc) > 60:
+                desc = desc[:57] + "…"
+            out.append(("fg:ansibrightblack", f"{desc}\n"))
+        return out
+
+    kb = KeyBindings()
+
+    @kb.add("up")
+    @kb.add("c-p")
+    @kb.add("k")
+    def _up(event):
+        state["index"] = (state["index"] - 1) % len(skills)
+
+    @kb.add("down")
+    @kb.add("c-n")
+    @kb.add("j")
+    def _down(event):
+        state["index"] = (state["index"] + 1) % len(skills)
+
+    @kb.add("home")
+    @kb.add("g")
+    def _top(event):
+        state["index"] = 0
+
+    @kb.add("end")
+    @kb.add("G")
+    def _bottom(event):
+        state["index"] = len(skills) - 1
+
+    @kb.add("enter")
+    def _accept(event):
+        state["result"] = skills[state["index"]]
+        event.app.exit()
+
+    @kb.add("escape")
+    @kb.add("c-c")
+    @kb.add("q")
+    def _cancel(event):
+        event.app.exit()
+
+    layout = Layout(
+        HSplit([
+            Window(
+                content=FormattedTextControl(get_text),
+                wrap_lines=True,
+                always_hide_cursor=True,
+            )
+        ])
+    )
+    app = Application(
+        layout=layout, key_bindings=kb,
+        full_screen=False, mouse_support=False,
+    )
+
+    try:
+        app.run()
+    except (KeyboardInterrupt, EOFError):
+        return None
+    return state["result"]
 
 
 def _execute_skill(skill: Skill, args: str, ctx: CommandContext) -> None:

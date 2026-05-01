@@ -173,14 +173,18 @@ def test_dispatch_skills_command_prints_pretty_blocks(tmp_path: Path, monkeypatc
     st = ReplState(chat_messages=[], session_store=store)
     ctx = CommandContext(workspace=ws, settings=settings, state=st)
 
-    seen: list[str] = []
-    monkeypatch.setattr("core.commands.log.info", lambda s="": seen.append(str(s)))
-    monkeypatch.setattr("core.commands.log.dim", lambda s="": seen.append(str(s)))
+    # /skills 现在弹 prompt_toolkit picker（无 tty 测试环境会卡），mock 掉
+    # _pick_skill_interactively 让它直接返回 None（模拟用户 ESC 取消）。
+    pick_calls: list = []
+
+    def _fake_pick(skills):
+        pick_calls.append(list(skills))
+        return None  # 用户取消
+
+    monkeypatch.setattr("core.commands._pick_skill_interactively", _fake_pick)
 
     assert dispatch_slash(ctx, "/skills") == "handled"
-    out = "\n".join(seen)
-    # only check for key tokens; rich markup should be present
-    assert "/s1" in out
-    assert "desc1" in out
-    assert "/s2" in out
-    assert "desc2" in out
+    # 验证 picker 被调用，且收到了注册的两个 skills
+    assert len(pick_calls) == 1
+    skill_names = {s.name for s in pick_calls[0]}
+    assert skill_names == {"s1", "s2"}
