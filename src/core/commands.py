@@ -108,8 +108,7 @@ def _cmd_history(ctx: CommandContext, args: str) -> None:
         return
     for i, m in enumerate(lst, start=1):
         sid_short = m.session_id[:12] + "…"
-        # 转义开方括号防止 rich 把 sid 当 markup tag 解释
-        log.dim(f"  {i}. \\[{sid_short}] {m.title} · {m.message_count} 条")
+        log.dim(f"  {i}. [{sid_short}] {m.title} · {m.message_count} 条")
 
 
 def _cmd_resume(ctx: CommandContext, args: str) -> None:

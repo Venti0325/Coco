@@ -318,7 +318,7 @@ def _render_history_to_scrollback(
             text = _user_visible_text(content).strip()
             if text:
                 # 与 REPL prompt 前缀同色（bold cyan），用户视觉一致
-                console.print(f"[bold cyan]>[/bold cyan] {text}")
+                console.print(Text.assemble(("> ", "bold cyan"), text))
             continue
 
         if role == "assistant":
@@ -339,7 +339,7 @@ def _render_history_to_scrollback(
                     name = block.get("name", "?")
                     inp = block.get("input", {}) or {}
                     preview = _tool_preview(name, inp)
-                    console.print(f"[dim]↳ {name}({preview})[/dim]")
+                    console.print(Text(f"↳ {name}({preview})", style="dim"))
             continue
         # 其他 role（system / tool 等）跳过
 
@@ -600,7 +600,7 @@ def _pick_session_via_input(sessions: list) -> str | None:
     log.info("可恢复的会话：")
     for i, m in enumerate(sessions, start=1):
         sid_short = m.session_id[:12] + "…"
-        log.dim(f"  {i}. \\[{sid_short}] {m.title} · {m.message_count} 条")
+        log.dim(f"  {i}. [{sid_short}] {m.title} · {m.message_count} 条")
 
     log.info("")
     try:
@@ -973,7 +973,7 @@ def entry() -> None:
             _stop_spinner()
             _streaming[0] = False
             preview = _tool_preview(name, inp)
-            console.print(f"\n[dim]↳ {name}({preview})[/dim]")
+            console.print(Text(f"\n↳ {name}({preview})", style="dim"))
             _start_spinner("执行工具…")
 
         with EscListener(on_cancel=engine.abort) as listener:

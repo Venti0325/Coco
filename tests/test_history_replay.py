@@ -77,6 +77,11 @@ def test_render_user_str_content():
     assert "> hello" in out
 
 
+def test_render_user_text_preserves_square_brackets():
+    out = _capture([{"role": "user", "content": "inspect [literal] marker"}])
+    assert "inspect [literal] marker" in out
+
+
 def test_render_user_list_content_with_text():
     out = _capture([
         {"role": "user", "content": [{"type": "text", "text": "你好"}]}
@@ -128,6 +133,23 @@ def test_render_assistant_tool_use():
     assert "↳" in out
     assert "Read" in out
     assert "/tmp/x.txt" in out
+
+
+def test_render_assistant_tool_use_preserves_square_brackets():
+    out = _capture([
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "t1",
+                    "name": "Read",
+                    "input": {"file_path": "/tmp/[literal].txt"},
+                }
+            ],
+        }
+    ])
+    assert "/tmp/[literal].txt" in out
 
 
 def test_render_full_conversation_order():

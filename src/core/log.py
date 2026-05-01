@@ -31,7 +31,7 @@ def info(msg: str) -> None:
 
 def dim(msg: str) -> None:
     """低强调的提示 / 状态信息。"""
-    _console.print(f"[dim]{msg}[/dim]")
+    _console.print(msg, style="dim", markup=False)
 
 
 def success(msg: str) -> None:
