@@ -326,9 +326,17 @@ def load_settings(
         provider = Provider.from_str(explicit_provider)
 
     # 2) model（直接使用用户填写的值，不做别名转换）
-    #    用户未填 → 按已选定 provider 取兜底；OPENAI 没兜底就保持 None，
-    #    交由下游 LLM 客户端报错（明显比静默给个错模型名好）。
-    model = _pick("model") or _AUTODETECTED_DEFAULT_MODEL.get(provider)
+    #    用户未填 → 按已选定 provider 取兜底；OPENAI 没兜底（多家兼容如 DashScope/
+    #    本地 LLM 的模型名差异太大，硬塞默认会误导）→ 直接 raise，让用户显式给
+    #    COCO_MODEL，比静默把 model=None 传给下游强。
+    explicit_model = _pick("model")
+    model = explicit_model or _AUTODETECTED_DEFAULT_MODEL.get(provider)
+    if model is None and provider == Provider.OPENAI:
+        raise ValueError(
+            "provider=openai 自动探测到但未配置模型；请设置 COCO_MODEL 或 "
+            "配置文件顶层 model（OpenAI 兼容后端模型名差异太大，不能自动猜测——"
+            "如 DashScope 用 qwen-plus、原生 OpenAI 用 gpt-5.5）。"
+        )
 
     # 3) api_key / base_url —— 必须在 max_tokens 之前算出来，
     #    这样 OpenRouter 动态查询（磁盘缓存命中时）能按正确的 base_url 分槽。

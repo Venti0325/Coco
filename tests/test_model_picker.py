@@ -9,7 +9,14 @@ from __future__ import annotations
 
 import pytest
 
-from core.commands import _MODEL_OPTIONS_BY_PROVIDER
+from core.commands import (
+    CommandContext,
+    ReplState,
+    _MODEL_OPTIONS_BY_PROVIDER,
+    _cmd_model,
+)
+from core.models import AppSettings, Provider
+from core.session import SessionStore
 
 
 # ── 表完整性 ─────────────────────────────────────────────────────────
@@ -93,3 +100,69 @@ def test_default_anthropic_model_is_in_list():
     """Anthropic 默认 claude-sonnet-4-6 应在 picker 列表里。"""
     names = [name for name, _, _, _ in _MODEL_OPTIONS_BY_PROVIDER["anthropic"]]
     assert "claude-sonnet-4-6" in names
+
+
+# ── picker 行为回归 ────────────────────────────────────────────────────
+
+
+class _DummyClient:
+    def __init__(self, model: str):
+        self.model = model
+        self.max_tokens: int | None = None
+
+    def get_model(self) -> str:
+        return self.model
+
+    def set_model(self, model: str, max_tokens: int | None = None) -> None:
+        self.model = model
+        self.max_tokens = max_tokens
+
+
+def test_model_direct_switch_updates_runtime_settings(tmp_path):
+    """`/model <name>` 更新 LLMClient 后，也要同步 ctx.settings 供 /doctor 与 auto-compact 使用。"""
+    settings = AppSettings(
+        provider=Provider.OPENROUTER,
+        model="anthropic/claude-sonnet-4-6",
+        api_key="sk-or-test",
+    )
+    client = _DummyClient(settings.model)
+    ctx = CommandContext(
+        workspace=tmp_path,
+        settings=settings,
+        state=ReplState([], SessionStore(tmp_path, settings.model)),
+        llm_client=client,
+    )
+
+    _cmd_model(ctx, "deepseek/deepseek-v4-pro")
+
+    assert client.model == "deepseek/deepseek-v4-pro"
+    assert ctx.settings.model == "deepseek/deepseek-v4-pro"
+    assert ctx.settings.max_tokens == client.max_tokens
+
+
+def test_model_picker_non_tty_falls_back_without_crashing(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """无 TTY 时 `/model` 无参数不应启动 prompt_toolkit Application 后抛 OSError。"""
+    settings = AppSettings(
+        provider=Provider.ANTHROPIC,
+        model="claude-sonnet-4-6",
+        api_key="sk-ant-test",
+    )
+    ctx = CommandContext(
+        workspace=tmp_path,
+        settings=settings,
+        state=ReplState([], SessionStore(tmp_path, settings.model)),
+        llm_client=_DummyClient(settings.model),
+    )
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    from prompt_toolkit.application import Application
+
+    def _raise_non_tty(self):
+        raise OSError(22, "Invalid argument")
+
+    monkeypatch.setattr(Application, "run", _raise_non_tty)
+
+    _cmd_model(ctx, "")

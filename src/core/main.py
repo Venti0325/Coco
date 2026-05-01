@@ -857,6 +857,7 @@ def entry() -> None:
         *,
         chat_messages: list,
         session_store: SessionStore | None,
+        current_settings: AppSettings,
         session_usage: TokenUsage | None = None,
     ) -> bool:
         """返回是否成功完成一轮（用于决定是否写会话）。
@@ -1069,7 +1070,7 @@ def entry() -> None:
                 cache_c=result.usage.cache_create,
             )
             if not args.print_mode:
-                _print_turn_usage(result.usage, session_usage, settings)
+                _print_turn_usage(result.usage, session_usage, current_settings)
         return True
 
     def _run_skill_fork(
@@ -1156,6 +1157,7 @@ def entry() -> None:
         session_store: SessionStore | None,
         system: str,
         session_usage: TokenUsage,
+        current_settings: AppSettings,
     ) -> None:
         """按累计 token 水位做三级自动 compact：
 
@@ -1167,7 +1169,7 @@ def entry() -> None:
             return
         _ = incoming_user_text
 
-        window = context_window_for(settings.model)
+        window = context_window_for(current_settings.model)
         used = session_usage.input_tokens  # 只看累计 input（output 每轮都是新的）
 
         # 无真实 token 数据：保持旧行为（按消息条数触发全量 summary）
@@ -1231,6 +1233,7 @@ def entry() -> None:
             args.prompt,
             chat_messages=chat_messages,
             session_store=one_shot_store,
+            current_settings=settings,
             session_usage=None,
         )
     else:
@@ -1337,6 +1340,7 @@ def entry() -> None:
                 session_store=repl_state.session_store,
                 system=cmd_ctx.system_prompt or system_prompt,
                 session_usage=repl_state.session_usage,
+                current_settings=cmd_ctx.settings,
             )
 
             # inline skill 约束：allowed_tools / disable_model_invocation
@@ -1369,6 +1373,7 @@ def entry() -> None:
                 text,
                 chat_messages=repl_state.chat_messages,
                 session_store=repl_state.session_store,
+                current_settings=cmd_ctx.settings,
                 session_usage=repl_state.session_usage,
             )
             # /init 等命令会在 pending_input 运行后注册回调（例如更新 system_prompt）

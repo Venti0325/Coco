@@ -188,3 +188,29 @@ def test_dispatch_skills_command_prints_pretty_blocks(tmp_path: Path, monkeypatc
     assert len(pick_calls) == 1
     skill_names = {s.name for s in pick_calls[0]}
     assert skill_names == {"s1", "s2"}
+
+
+def test_pick_skill_non_tty_falls_back_without_crashing(monkeypatch: pytest.MonkeyPatch):
+    """无 TTY 时 /skills picker 应退化成文本列表，而不是让 prompt_toolkit 抛 OSError。"""
+    from core.commands import _pick_skill_interactively
+    from core.skills import Skill
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    from prompt_toolkit.application import Application
+
+    def _raise_non_tty(self):
+        raise OSError(22, "Invalid argument")
+
+    monkeypatch.setattr(Application, "run", _raise_non_tty)
+
+    result = _pick_skill_interactively([
+        Skill(
+            name="sample",
+            description="desc",
+            source="bundled",
+            _prompt_text="x",
+        )
+    ])
+
+    assert result is None

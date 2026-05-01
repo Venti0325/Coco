@@ -209,6 +209,23 @@ def test_load_settings_autodetect_openrouter_when_only_key_set(
     assert s.model == "deepseek/deepseek-v4-pro"
 
 
+def test_load_settings_autodetect_openai_requires_model(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_args: Namespace,
+):
+    """只设 OPENAI_API_KEY 且未声明 model 时，不应生成 model=None 的半合法配置。"""
+    _clear_config_env(monkeypatch)
+    monkeypatch.setattr(
+        "core.config.user_config_file",
+        lambda: tmp_path / "missing.toml",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-autodetect")
+
+    with pytest.raises(ValueError, match="COCO_MODEL|model"):
+        load_settings(empty_args, workspace=tmp_path)
+
+
 def test_load_settings_autodetect_prefers_anthropic_when_multiple_keys(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -315,8 +315,19 @@ def _pick_skill_interactively(skills: list[Skill]) -> Skill | None:
     """skills 列表 → prompt_toolkit Application 交互选择。
 
     优先用 prompt_toolkit Application（↑↓ 导航 + Enter 选 + ESC 取消）；
-    缺失时打印纯文本列表并返回 None（用户得用 ``/<name>`` 直接调）。
+    prompt_toolkit 缺失或 stdin/stdout 非 TTY 时打印纯文本列表并返回 None
+    （用户得用 ``/<name>`` 直接调）。
     """
+    import sys as _sys
+
+    def _fallback_text_list() -> None:
+        log.info("可用技能：")
+        for s in skills:
+            desc = s.description or "（无说明）"
+            log.info(f"  [bold]/{s.name}[/bold]  [dim]({s.source})[/dim]")
+            log.dim(f"    {desc}")
+        log.info("")
+
     try:
         from prompt_toolkit import Application
         from prompt_toolkit.key_binding import KeyBindings
@@ -324,12 +335,13 @@ def _pick_skill_interactively(skills: list[Skill]) -> Skill | None:
         from prompt_toolkit.layout.containers import HSplit, Window
         from prompt_toolkit.layout.controls import FormattedTextControl
     except ImportError:
-        log.info("可用技能：")
-        for s in skills:
-            desc = s.description or "（无说明）"
-            log.info(f"  [bold]/{s.name}[/bold]  [dim]({s.source})[/dim]")
-            log.dim(f"    {desc}")
-        log.info("")
+        _fallback_text_list()
+        return None
+
+    # 非 TTY → 不启动 Application（subprocess / pytest / 被管道时
+    # Application.run() 会抛 OSError(22, "Invalid argument")）
+    if not (_sys.stdin.isatty() and _sys.stdout.isatty()):
+        _fallback_text_list()
         return None
 
     state: dict = {"index": 0, "result": None}
@@ -410,6 +422,10 @@ def _pick_skill_interactively(skills: list[Skill]) -> Skill | None:
     try:
         app.run()
     except (KeyboardInterrupt, EOFError):
+        return None
+    except OSError:
+        # 非 TTY 终端兜底（前面的 isatty 检查已经覆盖大多数场景，这里再加一层）
+        _fallback_text_list()
         return None
     return state["result"]
 
@@ -538,14 +554,39 @@ _MODEL_OPTIONS_BY_PROVIDER: dict[str, list[tuple[str, str, str, str]]] = {
 }
 
 
+def _apply_model_change(
+    ctx: CommandContext,
+    client: Any,
+    model: str,
+) -> None:
+    """统一的模型切换入口：动态查 max_tokens、更新 client + ctx.settings、打印日志。
+
+    AppSettings 是 frozen dataclass——用 ``dataclasses.replace`` 生成新实例
+    赋回 ctx.settings；这样 /doctor、auto-compact、context_window_for(settings.model)
+    等所有依赖 ctx.settings 的代码都能看到新模型，而不只是 LLMClient 内部知道。
+    """
+    from dataclasses import replace
+    from .config import _infer_max_tokens
+
+    max_t = _infer_max_tokens(
+        model,
+        provider=ctx.settings.provider,
+        allow_remote_fetch=True,
+        base_url=ctx.settings.base_url,
+    )
+    client.set_model(model, max_t)
+    ctx.settings = replace(ctx.settings, model=model, max_tokens=max_t)
+    log.info(f"已切换模型为 [bold]{model}[/bold]  (max_tokens={max_t:,})")
+
+
 def _cmd_model(ctx: CommandContext, args: str) -> None:
     """查看或切换模型。
 
     无参数：弹交互式列表（按当前 provider 给出 curated 选项 + ↑↓ + 数字键 + Enter）。
     有参数：直接切换为传入的模型名（不在 curated 列表也行）。
-    prompt_toolkit 缺失 → 退化成"显示当前 + 提示用 /model <名称>"。
+    prompt_toolkit 缺失或非 TTY → 退化成"显示当前 + 列出 curated 选项"。
     """
-    from .config import _infer_max_tokens
+    import sys as _sys
 
     client = ctx.llm_client
     if client is None:
@@ -556,15 +597,7 @@ def _cmd_model(ctx: CommandContext, args: str) -> None:
 
     # 有参数 → 直接切换
     if args.strip():
-        model = args.strip()
-        max_t = _infer_max_tokens(
-            model,
-            provider=ctx.settings.provider,
-            allow_remote_fetch=True,
-            base_url=ctx.settings.base_url,
-        )
-        client.set_model(model, max_t)
-        log.info(f"已切换模型为 [bold]{model}[/bold]  (max_tokens={max_t:,})")
+        _apply_model_change(ctx, client, args.strip())
         return
 
     provider_key = ctx.settings.provider.value
@@ -572,6 +605,16 @@ def _cmd_model(ctx: CommandContext, args: str) -> None:
     if not options:
         log.info(f"当前模型：{current}")
         log.dim(f"  使用 /model <名称> 切换（provider={provider_key} 暂无 curated 列表）")
+        return
+
+    # 非 TTY → 不启动 prompt_toolkit Application（subprocess / pytest 等场景
+    # Application.run() 会抛 OSError(22, "Invalid argument")）。退化成纯文本
+    # 列表，等价于 prompt_toolkit 缺失的 fallback。
+    if not (_sys.stdin.isatty() and _sys.stdout.isatty()):
+        log.info(f"当前模型：{current}")
+        log.dim(f"  非交互式终端，无法弹列表；用 /model <名称> 直接切换（provider={provider_key}）")
+        for name, label, info, price in options:
+            log.dim(f"    · {name} — {label}：{info} · {price}")
         return
 
     # prompt_toolkit Application 交互选择；缺失时退化纯文本
@@ -702,20 +745,18 @@ def _cmd_model(ctx: CommandContext, args: str) -> None:
         app.run()
     except (EOFError, KeyboardInterrupt):
         pass
+    except OSError:
+        # 非 TTY 终端（被管道 / 子进程 / 部分 CI runner）下 Application.run()
+        # 会抛 OSError(22, "Invalid argument")。视作"用户取消"——前面的 isatty
+        # 兜底其实已经覆盖大多数场景，这里防御性 catch 再补一层。
+        log.dim(f"未更改，保持为 {current}（终端不支持交互列表）")
+        return
 
     if result[0] is None:
         log.dim(f"未更改，保持为 {current}")
         return
 
-    model = result[0]
-    max_t = _infer_max_tokens(
-        model,
-        provider=ctx.settings.provider,
-        allow_remote_fetch=True,
-        base_url=ctx.settings.base_url,
-    )
-    client.set_model(model, max_t)
-    log.info(f"已切换模型为 [bold]{model}[/bold]  (max_tokens={max_t:,})")
+    _apply_model_change(ctx, client, result[0])
 
 
 def _cmd_doctor(ctx: CommandContext, args: str) -> None:
