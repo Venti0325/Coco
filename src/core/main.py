@@ -274,6 +274,55 @@ def _render_history_to_scrollback(
         # 其他 role（system / tool 等）跳过
 
 
+# ── REPL 退出 ─────────────────────────────────────────────────────────
+
+# Ctrl+C 双击退出的时窗（秒）；和 Claude Code 的 useDoublePress 800ms 对齐。
+# 800ms 这个值经过验证：足够慢手指完成两次按键、又不会误触发（持续按 5 秒
+# 后忘了再按一次也不会突然退出）。
+_DOUBLE_CTRL_C_WINDOW_S = 0.8
+
+
+class _DoubleCtrlCExit:
+    """REPL 循环 Ctrl+C 双击退出状态机。
+
+    用法：
+        tracker = _DoubleCtrlCExit()
+        try:
+            line = pt_session.prompt(...)
+        except KeyboardInterrupt:
+            if tracker.register_press():
+                break  # 第二次 Ctrl+C 在时窗内——退出
+            log.dim("再按一次 Ctrl+C 退出")
+            continue
+
+    时窗内连续两次 ``register_press()`` 返回 ``True``；超过时窗状态自动重置，
+    下次 ``register_press()`` 视为新一轮的"第一次"。
+    """
+
+    def __init__(self, window_seconds: float = _DOUBLE_CTRL_C_WINDOW_S) -> None:
+        self._window = window_seconds
+        self._last_press: float = 0.0
+
+    def register_press(self, now: float | None = None) -> bool:
+        """记录一次 Ctrl+C；返回 True 表示该退出（时窗内的第二次）。
+
+        ``now`` 用于测试注入时间戳；生产代码不传，默认 ``time.monotonic()``。
+        """
+        import time as _time
+        current = _time.monotonic() if now is None else now
+        # 第一次按（``_last_press == 0``）或距上次按超过时窗 → 这次按是"首按"
+        if self._last_press == 0.0 or (current - self._last_press) > self._window:
+            self._last_press = current
+            return False
+        # 时窗内的第二次按 → 退出，状态重置
+        self._last_press = 0.0
+        return True
+
+    def reset(self) -> None:
+        """主动清状态，例如用户成功完成一轮输入后让计数从零重新开始。"""
+        self._last_press = 0.0
+
+
 # ── 会话恢复 ─────────────────────────────────────────────────────────
 
 # argparse --resume 没带参数时占位的 sentinel；后续逻辑识别此值 → 弹交互列表
@@ -360,7 +409,15 @@ def _pick_session_via_pt(sessions: list) -> str | None:
         event.app.exit()
 
     layout = Layout(
-        HSplit([Window(content=FormattedTextControl(get_text), wrap_lines=True)])
+        HSplit([
+            Window(
+                content=FormattedTextControl(get_text),
+                wrap_lines=True,
+                # 否则 prompt_toolkit 会把终端光标停在 layout 第一个 cell，
+                # 终端以反色块绘制，看起来像首字符背景被点亮（用户截图里的"可"）。
+                always_hide_cursor=True,
+            )
+        ])
     )
 
     app = Application(
@@ -1037,6 +1094,7 @@ def entry() -> None:
         )
 
         pt_session = _build_prompt_session()
+        ctrl_c_tracker = _DoubleCtrlCExit()
 
         while True:
             try:
@@ -1047,9 +1105,16 @@ def entry() -> None:
             except EOFError:
                 break
             except KeyboardInterrupt:
-                log.dim("（已取消，输入 exit 退出）")
+                # 第一次 Ctrl+C: 提示用户再按一次；第二次（时窗内）真退出
+                if ctrl_c_tracker.register_press():
+                    log.info("")
+                    break
+                log.dim("（再按一次 Ctrl+C 退出，或输入 exit）")
                 log.info("")
                 continue
+            # 用户完成一轮输入 → 重置 Ctrl+C 计数（避免"刚才按过 Ctrl+C 但中途
+            # 改主意打了字"的 stale 计数与下一次 Ctrl+C 误连）
+            ctrl_c_tracker.reset()
             text = line.strip()
             if not text:
                 continue
