@@ -51,6 +51,7 @@ from core._keylistener import EscListener
 from core.markdown import render_markdown
 from core.streaming_markdown import StreamingMarkdownRenderer
 
+from rich.console import Group as _RichGroup
 from rich.live import Live
 from rich.spinner import Spinner
 from rich.text import Text
@@ -870,10 +871,20 @@ def entry() -> None:
         _streaming = [False]    # 是否已进入流式文本阶段
 
         def _start_spinner(msg: str = "思考中…") -> None:
+            """启动 spinner，并在其下方挂一行 dim hint——让"思考中""执行工具…"
+            等等待状态下也能看到快捷键提示（与 prompt 的 bottom_toolbar 同源
+            内容，避免 prompt_toolkit UI 暂停时这条 hint 凭空消失）。
+            """
             nonlocal spinner_live
             _stop_spinner()
             spinner_live = Live(
-                Spinner("dots", text=Text(msg, style="dim")),
+                _RichGroup(
+                    Spinner("dots", text=Text(msg, style="dim")),
+                    Text(
+                        "shift+tab: cycle modes · esc: cancel · /help: more",
+                        style="dim",
+                    ),
+                ),
                 console=console,
                 refresh_per_second=10,
                 transient=True,
