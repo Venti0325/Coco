@@ -32,12 +32,21 @@ from typing import Iterable
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
-from rich.console import Group, RenderableType
-from rich.padding import Padding
-from rich.rule import Rule
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
+from rich.segment import Segment
+from rich.style import Style
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
+
+# ── 主题色（参考 Claude Code 的 dark theme，对齐其 markdown 配色） ─────
+# 行内代码颜色：淡蓝紫，对应 theme.permission（rgb 177,185,249）。比"大块黄底"
+# 显眼但更柔和；同时在亮色背景下也可读（lightTheme 用更深的 rgb 87,105,247）。
+_INLINE_CODE_STYLE = "rgb(177,185,249)"
+
+# blockquote 左侧竖条字符：U+258E (LEFT ONE QUARTER BLOCK)；比 │ 略细，视觉
+# 占位更温和。前后空格用于分隔 bar 与内容。
+_BLOCKQUOTE_BAR = "▎ "
 
 # ── lexer 单例 + cache ───────────────────────────────────────────────
 
@@ -154,8 +163,9 @@ def _render_inline(inline_token: Token | None) -> Text:
         elif ctype == "hardbreak":
             out.append("\n")
         elif ctype == "code_inline":
-            # 行内代码：单色高亮（避免太抢眼，不上完整 syntax 高亮）
-            out.append(c.content, style="bold yellow on grey15")
+            # 行内代码：淡蓝紫前景色（和 Claude 一致），不加背景；视觉柔和且
+            # 在亮色/暗色终端都可读。
+            out.append(c.content, style=_INLINE_CODE_STYLE)
         elif ctype == "em_open":
             style_stack.append("italic")
         elif ctype == "em_close":
@@ -183,7 +193,7 @@ def _render_inline(inline_token: Token | None) -> Text:
                     style = " ".join(inner_stack) if inner_stack else ""
                     link_inner.append(cc.content, style=style or None)
                 elif cc.type == "code_inline":
-                    link_inner.append(cc.content, style="bold yellow on grey15")
+                    link_inner.append(cc.content, style=_INLINE_CODE_STYLE)
                 elif cc.type in ("em_open", "strong_open", "s_open"):
                     inner_stack.append(
                         {"em_open": "italic", "strong_open": "bold", "s_open": "strike"}[cc.type]
@@ -191,8 +201,9 @@ def _render_inline(inline_token: Token | None) -> Text:
                 elif cc.type in ("em_close", "strong_close", "s_close") and inner_stack:
                     inner_stack.pop()
                 j += 1
-            # 链接样式 + OSC 8 hyperlink。rich 用 link= meta 字段渲染 OSC 8。
-            link_inner.stylize(f"underline blue link {href}")
+            # 链接样式：underline + OSC 8 hyperlink；不加颜色，让终端默认处理
+            # （部分终端会把 OSC 8 链接自动着色，加 blue 反而会和它打架）。
+            link_inner.stylize(f"underline link {href}")
             out.append_text(link_inner)
             i = close_idx
         elif ctype == "image":
@@ -211,24 +222,67 @@ def _render_inline(inline_token: Token | None) -> Text:
 
 
 def _style_heading(text: Text, level: int) -> Text:
-    """按 heading 级别加样式：h1 加粗+下划线，h2+ 仅加粗。"""
+    """按 heading 级别加样式：h1 加粗+斜体+下划线，h2+ 仅加粗。
+
+    h1 三重样式（粗 + 斜 + 下划线）让最高级标题视觉差异最大；h2/h3+ 一律加粗
+    保持简洁——LLM 实际生成中很少用 4+ 级标题，差异化收益小。
+    """
     if level == 1:
-        text.stylize("bold underline")
+        text.stylize("bold italic underline")
     else:
         text.stylize("bold")
     return text
 
 
-def _style_blockquote(inner: RenderableType) -> RenderableType:
-    """blockquote：左侧竖线 + 整体 dim italic。
+class _BlockquoteWithBar:
+    """自定义 rich renderable：左侧加 dim 的 ▎ 竖条前缀，内容保持全亮 italic。
 
-    用 rich.padding.Padding 加左缩进，外加一个前缀字符。简单实现：
-    对单行 Text 直接 prefix；多行 group 走 Padding。这里一律走 Padding+Text 包装。
+    rich 没有内置的 blockquote 渲染器；``rich.padding.Padding`` 只能加缩进，
+    无法在每一行起始放一个有样式的字符。这里走自定义 ``__rich_console__``：
+    先用一个临时 Console 把 inner 渲染成 segments 流，按 ``\\n`` 分行，
+    每行行首插入 ``▎ ``（dim 样式），并且对 inner 段落整体加上 italic 样式
+    （仅在原段没显式样式的字段上覆加，避免覆盖代码块 / 行内代码已有颜色）。
     """
-    # 用 Padding 加 (上0 右0 下0 左2) 并通过自定义 character。简单方案：
-    # 直接把内容渲染成字符串再每行 prefix。但那样丢失嵌套渲染能力。
-    # rich 没有内置 blockquote prefix，自己用 Padding(2)。视觉上是缩进 2 格 + dim。
-    return Padding(inner, (0, 0, 0, 2), style="italic dim")
+
+    def __init__(
+        self,
+        inner: RenderableType,
+        bar: str = _BLOCKQUOTE_BAR,
+        bar_style: str = "dim",
+        content_style: str = "italic",
+    ) -> None:
+        self.inner = inner
+        self.bar = bar
+        self.bar_style = bar_style
+        self.content_style = content_style
+
+    def __rich_console__(
+        self, console: Console, options: ConsoleOptions
+    ) -> RenderResult:
+        bar_width = len(self.bar)
+        # inner 区域宽度收 bar_width，避免溢出
+        inner_options = options.update_width(max(1, options.max_width - bar_width))
+        bar_segment = Segment(self.bar, Style.parse(self.bar_style))
+        italic_style = Style.parse(self.content_style)
+
+        # 把 inner 渲染成 segments；按 \n 切行，每行前插 bar
+        rendered_lines = list(Segment.split_lines(console.render(self.inner, inner_options)))
+        for line_segments in rendered_lines:
+            yield bar_segment
+            for seg in line_segments:
+                # 给原 segment 叠加 italic（不覆盖已有 fg/bg/bold/underline）
+                merged_style = (seg.style or Style()) + italic_style
+                yield Segment(seg.text, merged_style)
+            yield Segment("\n")
+
+
+def _style_blockquote(inner: RenderableType) -> RenderableType:
+    """blockquote 渲染：dim ▎ 前缀 + italic 内容。
+
+    Claude Code 的做法是 dim 的左竖条 + 内容 italic 全亮度；比单纯 dim 全段
+    更易读（暗主题里 dim 的 italic 几乎看不见）。
+    """
+    return _BlockquoteWithBar(inner)
 
 
 def _render_list(
@@ -263,7 +317,8 @@ def _render_list(
                 if ordered
                 else "- "
             )
-            out.append(prefix, style="bold")
+            # 不加 bold——保持普通字重，让内容里真正的 **bold** 才显粗
+            out.append(prefix)
             out.append_text(item_text)
             out.append("\n")
             item_idx += 1
@@ -428,7 +483,8 @@ def _walk_blocks(tokens: list[Token]) -> Iterable[RenderableType]:
             yield _style_blockquote(Group(*inner_renderables))
             i = close_idx + 1
         elif ttype == "hr":
-            yield Rule(style="dim")
+            # 字面 "---"（dim）：比满宽 Rule 线更克制；和 Claude 一致
+            yield Text("---", style="dim")
             i += 1
         elif ttype == "table_open":
             close_idx = _find_close(tokens, i, "table_close")

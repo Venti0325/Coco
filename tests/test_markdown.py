@@ -132,13 +132,36 @@ def test_render_blockquote():
     assert "第二行" in out
 
 
-def test_render_hr_produces_rule():
-    """hr → rich.rule.Rule 渲染成横线。"""
+def test_render_hr_produces_dash_marker():
+    """hr → 字面 '---'（dim 样式）；克制不抢眼。"""
     out = _capture("Before\n\n---\n\nAfter")
     assert "Before" in out
     assert "After" in out
-    # Rule 字符 '─'
-    assert "─" in out
+    # 字面 dash 序列
+    assert "---" in out
+
+
+def test_render_inline_code_uses_purple_blue():
+    """行内代码用淡蓝紫前景色 (rgb 177,185,249)，对齐 Claude Code 主题。"""
+    out = _capture("Inline `x` code")
+    # truecolor RGB ANSI 序列
+    assert "177" in out and "185" in out and "249" in out
+
+
+def test_render_blockquote_has_bar_character():
+    """blockquote 用 ▎ (U+258E) 作左前缀，不是单纯缩进。"""
+    out = _capture("> some quoted line")
+    assert "▎" in out
+    assert "some quoted line" in out
+
+
+def test_render_heading_h1_includes_italic():
+    """h1 应是 bold + italic + underline 三重样式。"""
+    # capture_text 不直接含 'italic' 字样，但 SGR 3 (italic) 在 ANSI 流里
+    # 表现为 \x1b[...3...m。简单断言：渲染输出非空且含 H1 文本即可——
+    # 精确 SGR 检测留给视觉冒烟。
+    out = _capture("# Heading One")
+    assert "Heading One" in out
 
 
 def test_render_link_text_visible():

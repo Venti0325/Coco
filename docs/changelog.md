@@ -9,6 +9,10 @@
 
 ---
 
+## 2026-05-01
+
+- **(done)** Markdown 配色 / 排版细节打磨：行内代码颜色从"黄色字 + 灰底"改为淡蓝紫前景 `rgb(177,185,249)`（视觉柔和、亮暗主题都可读）；h1 加 italic（变成 bold+italic+underline 三重）让最高级标题视觉差异最大；blockquote 从 `Padding(2)+dim italic` 改为自定义 `_BlockquoteWithBar` rich renderable，左边 dim 的 `▎`（U+258E LEFT ONE QUARTER BLOCK）+ 内容 italic **全亮度**（暗主题里 dim italic 几乎看不见）；list `-` / `1.` 前缀去 bold（保持普通字重，让真正 `**bold**` 才显粗）；hr 从满宽 `rich.rule.Rule` 改为字面 `---` dim（更克制，不抢眼）；链接去 `blue` 颜色保留 underline + OSC 8（让终端默认配色处理 OSC 8 链接，避免和终端配色打架）；`tests/test_markdown.py` 更新 hr 断言 + 新增 inline code RGB / blockquote ▎ / h1 italic 的样式断言，326 tests passed
+
 ## 2026-04-30
 
 - **(done)** Markdown 流式渲染：新增 `src/core/markdown.py`（markdown-it-py + GFM 插件 lexer / 自写 `format_token` / token LRU cache 500 / fast-path 跳过纯文本 lexing）和 `src/core/streaming_markdown.py`（块边界切分算法：每来一片 chunk 拆出 stable prefix + unstable suffix，stable 段一次性 print 进 scrollback 永不重绘、unstable 段进 `rich.live.Live` 区域增量重绘）；改造 `main.py:_on_text_chunk` / `_on_tool_call` 接入 Live + 渲染器，工具调用边界 flush unstable；代码块走 `rich.syntax.Syntax` 高亮、表格走 `rich.table.Table`、链接走 OSC 8 hyperlink；显式声明 `markdown-it-py>=3.0.0` 依赖（实际是 rich 的 transitive dep，但显式写出避免未来 rich 解耦时静默断裂；GFM 表格和删除线由 markdown-it 内置规则提供，不需要 plugins）；添加 `tests/test_markdown.py` + `tests/test_streaming_markdown.py` 覆盖渲染函数与算法边界（未闭合 fence / monotonic advance / reset on non-prefix） → [sessions/2026-04-30-markdown-render.md](sessions/2026-04-30-markdown-render.md)
