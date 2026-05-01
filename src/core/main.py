@@ -60,10 +60,16 @@ try:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.completion import Completer, Completion
     from prompt_toolkit.document import Document
+    from prompt_toolkit.formatted_text import ANSI
     from prompt_toolkit.history import FileHistory
     _PT_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _PT_AVAILABLE = False
+
+
+# REPL 提示前缀：bold cyan "> " + 重置，与 banner 的 cyan 同源。
+# 用 ANSI 而非 \x1b 字面，让 prompt_toolkit 正确解析 SGR 序列、宽度计算无误差。
+_PROMPT_PREFIX_ANSI = "\x1b[1;36m> \x1b[0m"
 
 
 class _SlashCommandCompleter(Completer):
@@ -216,16 +222,17 @@ def _print_turn_usage(
     )
     if window:
         parts.append(f"({used_pct:.0f}% of {window:,})")
-    log.dim("  " + "  ".join(parts))
+    # 不加 "  " 缩进——和用户输入 (col 0) 左对齐
+    log.dim("  ".join(parts))
 
     # 接近上限时给出可见提示；下一轮 _auto_compact_if_needed 会实际触发动作。
     if window and used_pct >= 85:
         log.warn(
-            f"  ⚠ 上下文即将耗尽（{used_pct:.0f}% of {window:,}）——下一轮将触发全量 compact"
+            f"⚠ 上下文即将耗尽（{used_pct:.0f}% of {window:,}）——下一轮将触发全量 compact"
         )
     elif window and used_pct >= 70:
         log.dim(
-            f"  · 上下文接近满载（{used_pct:.0f}%）——下一轮将启用 micro-compact"
+            f"· 上下文接近满载（{used_pct:.0f}%）——下一轮将启用 micro-compact"
         )
 
 
@@ -542,9 +549,9 @@ def entry() -> None:
                     print(result.answer, end="" if result.answer.endswith("\n") else "\n")
         else:
             # 流式期间 unstable 段还在 Live 区里——必须 flush 到 scrollback
-            # 否则 Live transient 撤掉后这段就没了
+            # 否则 Live transient 撤掉后这段就没了。flush 内部 console.print 已经
+            # 加 \n 收尾，这里不再补空行——避免 token 行被推太远。
             _flush_buffer_to_scrollback()
-            console.print()
 
         if session_store is not None:
             usage = result.usage
@@ -769,7 +776,7 @@ def entry() -> None:
         while True:
             try:
                 if pt_session is not None:
-                    line = pt_session.prompt("> ")
+                    line = pt_session.prompt(ANSI(_PROMPT_PREFIX_ANSI))
                 else:
                     line = input("> ")
             except EOFError:

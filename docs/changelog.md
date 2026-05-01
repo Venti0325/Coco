@@ -11,6 +11,7 @@
 
 ## 2026-05-01
 
+- **(done)** REPL prompt + token 行排版：`> ` 提示前缀加 bold cyan 样式（与启动 banner 同色，用户输入区视觉更明显）；`_print_turn_usage` 去掉硬编码的 2 格缩进（之前会显得 token 行比用户输入往右错开）；流式结束后的多余 `console.print()` 空行删掉（response → token 行不再有冗余空白）
 - **(done)** Markdown 配色 / 排版细节打磨：行内代码颜色从"黄色字 + 灰底"改为淡蓝紫前景 `rgb(177,185,249)`（视觉柔和、亮暗主题都可读）；h1 加 italic（变成 bold+italic+underline 三重）让最高级标题视觉差异最大；blockquote 从 `Padding(2)+dim italic` 改为自定义 `_BlockquoteWithBar` rich renderable，左边 dim 的 `▎`（U+258E LEFT ONE QUARTER BLOCK）+ 内容 italic **全亮度**（暗主题里 dim italic 几乎看不见）；list `-` / `1.` 前缀去 bold（保持普通字重，让真正 `**bold**` 才显粗）；hr 从满宽 `rich.rule.Rule` 改为字面 `---` dim（更克制，不抢眼）；链接去 `blue` 颜色保留 underline + OSC 8（让终端默认配色处理 OSC 8 链接，避免和终端配色打架）；`tests/test_markdown.py` 更新 hr 断言 + 新增 inline code RGB / blockquote ▎ / h1 italic 的样式断言，326 tests passed
 
 ## 2026-04-30
