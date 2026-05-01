@@ -137,6 +137,13 @@ def _cmd_resume(ctx: CommandContext, args: str) -> None:
         ctx.workspace, ctx.settings.model, session_id=sid
     )
     log.info(f"已切换会话 {sid[:12]}…（{len(msgs)} 条消息）")
+    # 把历史消息回放到 scrollback。lazy import 避免和 main.py 循环依赖。
+    try:
+        from core.main import _render_history_to_scrollback
+        _render_history_to_scrollback(msgs, log.get_console())
+    except Exception:
+        # 渲染失败不影响 resume 本身；至少消息已加载到 chat_messages
+        pass
 
 
 def _cmd_workspace(ctx: CommandContext, args: str) -> None:

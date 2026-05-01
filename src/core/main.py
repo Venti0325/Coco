@@ -131,7 +131,10 @@ def _build_prompt_session() -> "PromptSession | None":  # type: ignore[type-arg]
         return PromptSession(
             history=FileHistory(str(history_file())),
             completer=_SlashCommandCompleter(),
-            complete_while_typing=False,
+            # 实时补全：用户打 "/" 立刻弹命令下拉（带 display_meta 说明）。
+            # 非斜杠输入不会触发——_SlashCommandCompleter.get_completions
+            # 看到非 "/" 开头立刻 return，所以普通打字零开销。
+            complete_while_typing=True,
         )
     except Exception:
         return None
@@ -198,6 +201,72 @@ def _tool_preview(name: str, inp: dict) -> str:
     if name in ("Glob", "Grep"):
         return str(inp.get("pattern", ""))
     return ""
+
+
+def _user_visible_text(content) -> str:
+    """从 user role 消息提取可见的输入文字；跳过 tool_result 这类系统块。
+
+    user 消息既可能是真正的用户输入（``content`` 为 str 或含 text block 的 list），
+    也可能是 agent 循环里塞回的 tool_result 反馈（``content`` 为含 tool_result block
+    的 list）。后者用户视角不该再次显示。
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                return str(block.get("text", ""))
+    return ""
+
+
+def _render_history_to_scrollback(
+    messages: list[dict],
+    console,
+) -> None:
+    """把已恢复的会话消息回放到 scrollback——让 /resume 后用户能看到上次对话。
+
+    渲染规则：
+
+    - **user 文本** → ``> {text}`` bold cyan 前缀（与 REPL prompt 同样式）
+    - **assistant 文本** → ``render_markdown`` 完整渲染（同流式时一致体验）
+    - **tool_use** → ``↳ Tool(preview)`` dim 一行，复用 ``_tool_preview``
+    - **tool_result** → 跳过（信息密度低、占位大；agent 内存里仍有完整数据）
+    - 异常 / 无文本的消息 → 跳过
+
+    渲染失败兜底：``console.print(text, markup=False)`` 保证不崩。
+    """
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+
+        if role == "user":
+            text = _user_visible_text(content).strip()
+            if text:
+                # 与 REPL prompt 前缀同色（bold cyan），用户视觉一致
+                console.print(f"[bold cyan]>[/bold cyan] {text}")
+            continue
+
+        if role == "assistant":
+            blocks = content if isinstance(content, list) else []
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type")
+                if btype == "text":
+                    txt = block.get("text", "") or ""
+                    if not txt.strip():
+                        continue
+                    try:
+                        console.print(render_markdown(txt))
+                    except Exception:
+                        console.print(txt, markup=False)
+                elif btype == "tool_use":
+                    name = block.get("name", "?")
+                    inp = block.get("input", {}) or {}
+                    preview = _tool_preview(name, inp)
+                    console.print(f"[dim]↳ {name}({preview})[/dim]")
+            continue
+        # 其他 role（system / tool 等）跳过
 
 
 # ── Token 用量显示 ────────────────────────────────────────────────────
@@ -747,6 +816,8 @@ def entry() -> None:
                 log.dim(
                     f"已恢复会话 {args.resume[:12]}…（{len(loaded)} 条消息）"
                 )
+                # 把历史消息回放到 scrollback；让用户视觉上能看到上次对话
+                _render_history_to_scrollback(loaded, log.get_console())
             else:
                 log.warn(f"未找到会话 {args.resume!r}，已启动新会话。")
                 session_store = SessionStore(workspace, settings.model)
