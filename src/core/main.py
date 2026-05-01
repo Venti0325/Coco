@@ -58,10 +58,15 @@ from rich.text import Text
 # ── prompt_toolkit（可选，缺失时降级为 input()）─────────────────────────
 try:
     from prompt_toolkit import PromptSession
+    from prompt_toolkit.application import Application
     from prompt_toolkit.completion import Completer, Completion
     from prompt_toolkit.document import Document
     from prompt_toolkit.formatted_text import ANSI
     from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout
+    from prompt_toolkit.layout.containers import HSplit, Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
     _PT_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _PT_AVAILABLE = False
@@ -276,21 +281,110 @@ _RESUME_PICK_SENTINEL = "__pick__"
 
 
 def _pick_session_interactively(workspace: Path) -> str | None:
-    """列出已保存的会话，让用户输入序号或 session_id 前缀选择。
+    """列出已保存的会话，让用户用 ↑/↓ 选择并 Enter 确认（或 ESC 取消）。
 
-    返回选定的 session_id；用户取消（空输入 / EOF / 列表为空）返回 None。
-    仅适用于 stdin 是 tty 的交互场景；非 tty 时 caller 应自行规避。
+    优先使用 prompt_toolkit 的 ``Application`` + ``KeyBindings`` 实现真正的
+    方向键导航；不可用时降级到 ``input()`` 接收序号 / id 前缀。
+
+    返回选定的 session_id；用户取消（ESC / Ctrl+C / EOF / 列表为空）返回 None。
     """
     sessions = SessionStore.list_sessions(workspace)
     if not sessions:
         log.dim("当前工作区暂无已保存会话。")
         return None
 
+    if _PT_AVAILABLE:
+        return _pick_session_via_pt(sessions)
+    return _pick_session_via_input(sessions)
+
+
+def _pick_session_via_pt(sessions: list) -> str | None:
+    """prompt_toolkit Application 路径：方向键 + Enter / ESC。
+
+    渲染策略：当前 selection 高亮（bold cyan ▶ 前缀），其余 dim；底部一行
+    操作提示。Application 使用非 fullscreen 模式（``full_screen=False``），
+    退出时自动清理渲染区，不污染 scrollback。
+    """
+    state: dict = {"index": 0, "result": None}
+
+    def get_text():
+        # FormattedTextControl 接受 (style, text) 元组列表
+        out: list[tuple[str, str]] = [
+            ("bold", "可恢复的会话："),
+            ("", "\n"),
+        ]
+        for i, m in enumerate(sessions):
+            sid_short = m.session_id[:12] + "…"
+            label = f"[{sid_short}] {m.title} · {m.message_count} 条"
+            if i == state["index"]:
+                out.append(("bold fg:cyan", f"  ▶ {label}"))
+            else:
+                out.append(("class:dim", f"    {label}"))
+            out.append(("", "\n"))
+        out.append(("class:dim", "↑/↓ 选择，Enter 确认，ESC 取消"))
+        return out
+
+    kb = KeyBindings()
+
+    @kb.add("up")
+    @kb.add("c-p")
+    @kb.add("k")
+    def _up(event):
+        state["index"] = (state["index"] - 1) % len(sessions)
+
+    @kb.add("down")
+    @kb.add("c-n")
+    @kb.add("j")
+    def _down(event):
+        state["index"] = (state["index"] + 1) % len(sessions)
+
+    @kb.add("home")
+    @kb.add("g")
+    def _top(event):
+        state["index"] = 0
+
+    @kb.add("end")
+    @kb.add("G")
+    def _bottom(event):
+        state["index"] = len(sessions) - 1
+
+    @kb.add("enter")
+    def _accept(event):
+        state["result"] = sessions[state["index"]].session_id
+        event.app.exit()
+
+    @kb.add("escape")
+    @kb.add("c-c")
+    @kb.add("q")
+    def _cancel(event):
+        event.app.exit()
+
+    layout = Layout(
+        HSplit([Window(content=FormattedTextControl(get_text), wrap_lines=True)])
+    )
+
+    app = Application(
+        layout=layout,
+        key_bindings=kb,
+        full_screen=False,
+        mouse_support=False,
+    )
+
+    try:
+        app.run()
+    except (KeyboardInterrupt, EOFError):
+        return None
+    return state["result"]
+
+
+def _pick_session_via_input(sessions: list) -> str | None:
+    """input() fallback：列出列表，读序号 / id 前缀。
+
+    prompt_toolkit 不可用（极少见）或测试环境用。和原来逻辑一致。
+    """
     log.info("可恢复的会话：")
     for i, m in enumerate(sessions, start=1):
         sid_short = m.session_id[:12] + "…"
-        # rich 会把 [xxx] 当 markup tag 解释（unknown tag 静默吞掉）。
-        # 只需转义开方括号；右括号在 rich markup 里只在 tag 内有意义。
         log.dim(f"  {i}. \\[{sid_short}] {m.title} · {m.message_count} 条")
 
     log.info("")
@@ -302,9 +396,8 @@ def _pick_session_interactively(workspace: Path) -> str | None:
     if not line:
         return None
 
-    # 1. 纯数字 + 在序号范围内 → 用作 1-based 序号（最常见的"列表选择"行为）
-    # 2. 否则一律视为 session_id 前缀匹配——这同时处理了 UUID hex 前缀恰好
-    #    全是数字（约 2% 概率）的情况，避免被错误地当成"超出范围的序号"。
+    # 1. 纯数字 + 序号范围内 → 1-based 序号
+    # 2. 否则视为 session_id 前缀；UUID hex 全数字前缀也走这条
     if line.isdigit():
         idx = int(line) - 1
         if 0 <= idx < len(sessions):

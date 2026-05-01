@@ -19,6 +19,7 @@ from core.main import (
     _build_parser,
     _load_or_create_session,
     _pick_session_interactively,
+    _pick_session_via_input,
     _render_history_to_scrollback,
     _user_visible_text,
 )
@@ -278,14 +279,19 @@ def test_load_or_create_session_pick_sentinel_repl_calls_picker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """REPL 模式 + sentinel → 调用交互式选择器。"""
-    # 先建一个会话
+    """REPL 模式 + sentinel → 调用交互式选择器。
+
+    prompt_toolkit Application 在 pytest 无 tty 环境会卡，这里 mock 整个
+    _pick_session_interactively 直接返回首个 session_id。
+    """
     pre = SessionStore(tmp_path, model="test-model")
     sid = pre.session_id
     pre.save_transcript([{"role": "user", "content": "hi"}])
 
-    # mock 交互输入：用户输入 "1"（选第一个）
-    monkeypatch.setattr("builtins.input", lambda *_: "1")
+    monkeypatch.setattr(
+        "core.main._pick_session_interactively",
+        lambda _ws: sid,
+    )
 
     args = _make_args(prompt=None, resume=_RESUME_PICK_SENTINEL)
     settings = _make_settings()
@@ -298,10 +304,13 @@ def test_load_or_create_session_pick_sentinel_repl_user_cancels(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """REPL + sentinel + 用户回车取消 → 落到新会话。"""
+    """REPL + sentinel + 用户取消 → 落到新会话。"""
     pre = SessionStore(tmp_path, model="test-model")
     pre.save_transcript([{"role": "user", "content": "hi"}])
-    monkeypatch.setattr("builtins.input", lambda *_: "")
+    monkeypatch.setattr(
+        "core.main._pick_session_interactively",
+        lambda _ws: None,
+    )
 
     args = _make_args(prompt=None, resume=_RESUME_PICK_SENTINEL)
     settings = _make_settings()
@@ -310,16 +319,19 @@ def test_load_or_create_session_pick_sentinel_repl_user_cancels(
     assert msgs == []
 
 
-# ── _pick_session_interactively ──────────────────────────────────────
+# ── _pick_session_interactively（顶层 dispatcher） ──────────────────
 
 
-def test_pick_session_empty_workspace(tmp_path: Path):
-    """空工作区 → 返回 None，不要求任何输入。"""
+def test_pick_session_interactively_empty_workspace(tmp_path: Path):
+    """空工作区 → 返回 None，不要求任何输入（连 Application 都不启）。"""
     sid = _pick_session_interactively(tmp_path)
     assert sid is None
 
 
-def test_pick_session_by_index(
+# ── _pick_session_via_input（input() fallback 路径） ────────────────
+
+
+def test_pick_session_via_input_by_index(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -327,70 +339,81 @@ def test_pick_session_by_index(
     sid = pre.session_id
     pre.save_transcript([{"role": "user", "content": "hi"}])
 
+    sessions = SessionStore.list_sessions(tmp_path)
     monkeypatch.setattr("builtins.input", lambda *_: "1")
-    picked = _pick_session_interactively(tmp_path)
-    assert picked == sid
+    assert _pick_session_via_input(sessions) == sid
 
 
-def test_pick_session_by_id_prefix(
+def test_pick_session_via_input_by_id_prefix(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     """非纯数字前缀 → 直接走前缀匹配。"""
-    # 用确定性 session_id（首字符非数字），避免随机 UUID 偶尔全数字 prefix
     pre = SessionStore(tmp_path, model="test-model", session_id="abc12345def67890" * 2)
     sid = pre.session_id
     pre.save_transcript([{"role": "user", "content": "hi"}])
 
+    sessions = SessionStore.list_sessions(tmp_path)
     monkeypatch.setattr("builtins.input", lambda *_: "abc1")
-    picked = _pick_session_interactively(tmp_path)
-    assert picked == sid
+    assert _pick_session_via_input(sessions) == sid
 
 
-def test_pick_session_numeric_prefix_falls_back_to_prefix_match(
+def test_pick_session_via_input_numeric_prefix_falls_back(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """纯数字 + 超出序号范围 → fallback 到前缀匹配，而非直接报错。
+    """纯数字 + 超出序号范围 → fallback 到前缀匹配。
 
-    保护场景：用户工作区只有 1 个会话，但 session_id 前几位恰好是数字
-    （UUID hex 有 ~2% 概率），输入 "830947" 这种应该被当 id 前缀解释。
+    保护场景：UUID hex 前几位恰好全数字（约 2% 概率），输入 "830947"
+    应该被当 id 前缀解释而非"超出范围的序号"报错。
     """
     pre = SessionStore(tmp_path, model="test-model", session_id="830947abcdef" + "0" * 20)
     sid = pre.session_id
     pre.save_transcript([{"role": "user", "content": "hi"}])
 
-    # 序号 830947 远超范围（只 1 个会话），但 sid 以 "830947" 开头
+    sessions = SessionStore.list_sessions(tmp_path)
     monkeypatch.setattr("builtins.input", lambda *_: "830947")
-    picked = _pick_session_interactively(tmp_path)
-    assert picked == sid
+    assert _pick_session_via_input(sessions) == sid
 
 
-def test_pick_session_invalid_index(
+def test_pick_session_via_input_invalid_index(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     pre = SessionStore(tmp_path, model="test-model")
     pre.save_transcript([{"role": "user", "content": "hi"}])
 
+    sessions = SessionStore.list_sessions(tmp_path)
     monkeypatch.setattr("builtins.input", lambda *_: "999")
-    picked = _pick_session_interactively(tmp_path)
-    assert picked is None
+    assert _pick_session_via_input(sessions) is None
 
 
-def test_pick_session_eof_returns_none(
+def test_pick_session_via_input_eof_returns_none(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """用户 Ctrl+D / Ctrl+C → EOFError/KeyboardInterrupt 被吞，返回 None。"""
     pre = SessionStore(tmp_path, model="test-model")
     pre.save_transcript([{"role": "user", "content": "hi"}])
+
+    sessions = SessionStore.list_sessions(tmp_path)
 
     def raise_eof(*_):
         raise EOFError()
     monkeypatch.setattr("builtins.input", raise_eof)
-    picked = _pick_session_interactively(tmp_path)
-    assert picked is None
+    assert _pick_session_via_input(sessions) is None
+
+
+def test_pick_session_via_input_empty_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """用户回车（空输入）→ 取消，返回 None。"""
+    pre = SessionStore(tmp_path, model="test-model")
+    pre.save_transcript([{"role": "user", "content": "hi"}])
+
+    sessions = SessionStore.list_sessions(tmp_path)
+    monkeypatch.setattr("builtins.input", lambda *_: "")
+    assert _pick_session_via_input(sessions) is None
 
 
 # ── /resume 不带参数也走 picker ──────────────────────────────────────
@@ -400,14 +423,14 @@ def test_slash_resume_no_args_invokes_picker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """/resume 不带参数 → 调用 _pick_session_interactively 进交互列表。
+    """/resume 不带参数 → 调用 picker。
 
-    这是个 smoke test：mock input 选第 1 项，验证 ctx 状态被更新到目标 session。
+    mock _pick_session_interactively 直接返回目标 sid，避开 prompt_toolkit
+    Application 在无 tty 测试环境的实启动。
     """
     from core.commands import _cmd_resume, CommandContext, ReplState
     from core.session import SessionStore
 
-    # 准备两个会话
     s1 = SessionStore(tmp_path, model="test-model")
     s1.save_transcript([{"role": "user", "content": "first"}])
     s1_id = s1.session_id
@@ -415,7 +438,6 @@ def test_slash_resume_no_args_invokes_picker(
     s2 = SessionStore(tmp_path, model="test-model")
     s2.save_transcript([{"role": "user", "content": "second"}])
 
-    # 当前在 s2；/resume 无参数 → 弹列表 → 选 1（按 updated_at 倒序，s2 是 1）
     state = ReplState(chat_messages=[], session_store=s2)
     ctx = CommandContext(
         workspace=tmp_path,
@@ -425,12 +447,11 @@ def test_slash_resume_no_args_invokes_picker(
         llm_client=None,
     )
 
-    monkeypatch.setattr("builtins.input", lambda *_: "2")
+    # 直接 mock dispatcher 函数返回 s1_id（绕开 prompt_toolkit Application）
+    monkeypatch.setattr("core.main._pick_session_interactively", lambda _: s1_id)
     _cmd_resume(ctx, "")
 
-    # 应该切到 s1（"2" 选第二个，即 s1）
     assert ctx.state.session_store.session_id == s1_id
-    # 历史也加载了
     assert any(
         _user_visible_text(m.get("content")) == "first"
         for m in ctx.state.chat_messages
