@@ -871,20 +871,23 @@ def entry() -> None:
         _streaming = [False]    # 是否已进入流式文本阶段
 
         def _start_spinner(msg: str = "思考中…") -> None:
-            """启动 spinner，并在其下方挂一行 dim hint——让"思考中""执行工具…"
-            等等待状态下也能看到快捷键提示（与 prompt 的 bottom_toolbar 同源
-            内容，避免 prompt_toolkit UI 暂停时这条 hint 凭空消失）。
+            """启动 spinner；spinner 文本里直接拼一段更暗的 hint，单行紧凑显示。
+
+            框架限制：rich.live 不像 prompt_toolkit 的 bottom_toolbar 能贴屏底
+            （那会要 alt-screen 把 scrollback 清掉，与"流式 console"形态冲突）。
+            折中做法：把 hint 跟 spinner 文本拼一行——视觉上是 spinner 自己的
+            一部分，不再像"无主漂浮"的 footer。
             """
             nonlocal spinner_live
             _stop_spinner()
+            spinner_text = (
+                Text(msg, style="dim")
+                + Text("   ", style="dim")
+                + Text("(esc to cancel · shift+tab to switch mode)",
+                       style="bright_black")
+            )
             spinner_live = Live(
-                _RichGroup(
-                    Spinner("dots", text=Text(msg, style="dim")),
-                    Text(
-                        "shift+tab: cycle modes · esc: cancel · /help: more",
-                        style="dim",
-                    ),
-                ),
+                Spinner("dots", text=spinner_text),
                 console=console,
                 refresh_per_second=10,
                 transient=True,
