@@ -67,9 +67,24 @@ try:
     from prompt_toolkit.layout import Layout
     from prompt_toolkit.layout.containers import HSplit, Window
     from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.styles import Style as _PtStyle
     _PT_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _PT_AVAILABLE = False
+
+
+# 关掉 prompt_toolkit 默认的 bottom-toolbar 反色背景（白条）和 rprompt 的
+# 默认背景。让 toolbar 在 default 模式（callable 返回 None）下隐身、有内容时
+# 只显示我们自定义的彩字；rprompt 的 git 分支块由我们自己上 cyan bg，不再
+# 套 prompt_toolkit 的额外反色。
+if _PT_AVAILABLE:
+    _PROMPT_STYLE = _PtStyle.from_dict({
+        "bottom-toolbar": "noreverse bg:default",
+        "bottom-toolbar.text": "noreverse bg:default",
+        "rprompt": "noreverse bg:default",
+    })
+else:  # pragma: no cover
+    _PROMPT_STYLE = None
 
 
 # REPL 提示前缀：bold cyan "> " + 重置，与 banner 的 cyan 同源。
@@ -191,6 +206,9 @@ def _build_prompt_session(
             bottom_toolbar=bottom_toolbar,
             rprompt=rprompt,
             key_bindings=kb,
+            # 自定义 style：去掉 bottom-toolbar / rprompt 的默认反色背景（避免
+            # default 模式下出现刺眼的白条）。我们自己上的 fg/bg 仍然生效。
+            style=_PROMPT_STYLE,
         )
     except Exception:
         return None
