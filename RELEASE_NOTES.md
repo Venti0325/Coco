@@ -26,6 +26,14 @@
 - **stdin 非 TTY 时 `EscListener` 降级** — benchmark 子进程 / pipe 输入下 `termios.tcgetattr` 失败时不再 abort，自动 no-op。
 - **`coco --print` 模式保存会话 JSONL** — 让 benchmark harness 能从 session 还原 turns/usage/tool_log。
 - **Windows `no_file_modified` scorer 误判** — 改用深度字节比对替代 `filecmp.dircmp`，避开 Windows mtime 精度粗时同长度不同内容被判一致的坑。
+- **Windows asyncio / `_overlapped`（进程级）** — 新增 `src/core/windows_asyncio.py`，在加载 `main` 后尽早调用 `apply_windows_selector_event_loop_policy()`，使整进程在创建任意 asyncio loop 前统一为 `WindowsSelectorEventLoopPolicy`（避免未配置 MCP 时从不设策略、或 httpx 等先于 MCP 线程创建默认 `ProactorEventLoop` 而触发 `RuntimeError: Overlapped ... still has pending operation`）。与 MCP 后台 `BackgroundLoop` 内的策略调用并存且幂等。
+- **MCP `BackgroundLoop` 超时与收尾** — `run(timeout=None)` 使用模块级 `DEFAULT_RUN_TIMEOUT`（秒）兜底；`fut.result` 超时后 `cancel` 桥接 Future；`stop()` 默认延长线程 join 等待。降低无限阻塞与难以退出后台 loop 的概率（纯同步阻塞的协程仍无法在 asyncio 层强行打断）。
+
+### 工具与提示
+
+- **Grep（Python 回退）** — 在未安装 `rg`、走纯 Python 扫描时，对目录遍历增加整体墙钟上限；超时返回可读错误并提示安装 ripgrep 或缩小 path/glob。
+- **压缩进行中提示** — 手动 `/compact`（含 `--micro`）、自动 micro-compact、自动全量 summary 在实际压缩前输出 `log.info`（如「正在压缩中……」「正在裁剪早期工具结果……」），避免长耗时压缩被误认为卡顿。
+- **回复语种（system）** — `build_system_prompt` 与 engine 默认 system 明确：**以最新用户消息的自然语言为准**；工具输出与代码库文件多为英文时，**不应**据此默认用英文写说明（减轻中文输入却英文回答的漂移）。
 
 ### 新斜杠命令
 - **`/mcp`** — 列出已配置 MCP server 与状态（idle/running/failed + tool count）。
@@ -45,7 +53,7 @@
 - **上下文压缩**：手动 `/compact` 与 `/compact --micro`；按 token 水位三级 auto-compact（70% micro / 85% full）。
 - **Skills**：内置与磁盘加载；`/<skill>` 执行；支持 `context: fork` 的隔离执行；`allowed_tools` 与 `paths` 的运行时约束。
 - **工作区**：`/workspace` / `/cd` 切换目录（清空上下文并开新会话）。
-- **系统提示**：工作目录、日期、可选 git 摘要、可选 `COCO.md` / `CLAUDE.md`。
+- **系统提示**：工作目录、日期、可选 git 摘要、可选 `COCO.md` / `CLAUDE.md`；内置回复语种约定（对齐用户最新提问语种）。
 - **Benchmark harness**：20+ 种子任务 + 10 种 scorer + markdown 报告；CLI `coco-bench` 或 `python -m benchmarks.run`。
 
 ---
