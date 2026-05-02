@@ -5,12 +5,15 @@ from __future__ import annotations
 import glob as glob_module
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
 from .base import Tool, ToolOutcome, ToolSpec
 
 _MAX_FILE_BYTES = 1 * 1024 * 1024  # 1 MB：超过此大小的文件跳过全量读取
+# Python 回退路径无 subprocess 超时；极大目录下可能长时间占用 CPU，整体限时。
+_PYTHON_GREP_MAX_SECONDS = 120
 
 
 def _fail(message: str) -> ToolOutcome:
@@ -161,7 +164,13 @@ class GrepTool(Tool):
             files = [base / p for p in rels]
 
         matched: list[str] = []
+        deadline = time.monotonic() + _PYTHON_GREP_MAX_SECONDS
         for f in files:
+            if time.monotonic() > deadline:
+                return _fail(
+                    f"Error: Python grep exceeded {_PYTHON_GREP_MAX_SECONDS}s "
+                    "(too many files or very slow disk); narrow path/glob or install ripgrep."
+                )
             if not f.is_file():
                 continue
             # 跳过超大文件，避免内存压力

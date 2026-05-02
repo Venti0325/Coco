@@ -51,7 +51,9 @@ Gather facts with Read/Glob/Grep before editing. Edit requires old_string to mat
 
 When exploring a project structure, always use Glob with pattern "**/*" (not "*.*") to find all files recursively.
 
-After tools return, answer clearly. Avoid redundant calls and endless loops."""
+After tools return, answer clearly. Avoid redundant calls and endless loops.
+
+Language: Match the latest user message; if it contains Chinese (CJK), reply in Chinese for prose; tool/file content may be English without changing your reply language."""
 
 
 @dataclass

@@ -14,6 +14,11 @@ from pathlib import Path
 if sys.platform == "win32":
     os.environ.setdefault("PYTHONUTF8", "1")
 
+# 须在进程内任何 asyncio 循环创建之前设置（含 httpx/第三方库、或不使用 MCP 时）。
+from core.windows_asyncio import apply_windows_selector_event_loop_policy
+
+apply_windows_selector_event_loop_policy()
+
 from core import __version__
 from core.paths import config_home, data_home, ensure_dir, history_file, state_home
 from core.config import load_settings
@@ -1131,6 +1136,7 @@ def entry() -> None:
     ) -> None:
         if session_store is None:
             return
+        log.info("正在压缩上下文……")
         try:
             new_msgs, _summary = compact_service.compact(
                 list(chat_messages),
@@ -1190,6 +1196,7 @@ def entry() -> None:
         if should_micro_compact(used, window) and not should_full_compact(used, window):
             target = compact_target_tokens(used, window)
             if target > 0:
+                log.info("正在裁剪早期工具结果……")
                 new_msgs, freed, count = micro_compact(
                     chat_messages,
                     target_free_tokens=target,

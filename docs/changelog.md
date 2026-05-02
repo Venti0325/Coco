@@ -9,6 +9,11 @@
 
 ---
 
+## 2026-05-02
+
+- **(done)** Windows asyncio / MCP：`src/core/windows_asyncio.py` 在 `main.py` 最早 import 后调用 `apply_windows_selector_event_loop_policy()`，保证进程内先有 Selector 策略再创建任意 asyncio loop（避免仅 MCP `BackgroundLoop` 线程设策略时，主线程或 httpx 等库先拿到 `ProactorEventLoop` 触发 `_overlapped ... pending`）。`mcp/_bridge.py`：模块级 `DEFAULT_RUN_TIMEOUT`（秒）、`run(timeout=None)` 使用该兜底、`TimeoutError` 后 `cancel` Future、`stop()` 默认 `join_timeout=5s`。`grep_tool.py`：Python 回退路径在遍历文件时增加整体墙钟上限（120s），超大目录早失败并提示安装 ripgrep。新增 `tests/test_windows_asyncio.py`；`tests/test_mcp_bridge.py` 补充 Selector / 默认超时用例。403 tests passed
+- **(done)** 交互与模型提示：手动 `/compact`（LLM / `--micro`）、自动 micro-compact、自动全量 summary 压缩前增加 `log.info`（「正在压缩中……」「正在裁剪早期工具结果……」「正在压缩上下文……」），减轻长时间压缩被误认为卡顿。`context.py` `build_system_prompt` 与 `engine.py` 默认 `_SYSTEM`：明确「以最新用户消息语种为准」，工具/文件中的英文不改变答复语种（减轻中英混杂会话里模型偏英文）
+
 ## 2026-05-01
 
 - **(done)** 全代码库 bug scan + 面试准备文档：阅读 `src/core/`、`benchmarks/` 与测试覆盖，梳理配置合并、LLM provider 适配、Engine 工具循环、REPL/session/compact、Markdown 渲染、权限、MCP、skills 与 benchmark harness；新增 `docs/interview-prep.md`，包含架构图、agent loop、provider adapter、context compaction、技术亮点、技术选择和面试 Q&A。扫描中修复一个 Rich markup 输出 bug：动态文本里的 `[literal]` 以前会在历史回放、工具调用预览和 `log.dim()` 中被当作 markup 吞掉；现在改用 `Text` / `markup=False` 保留原文，并补 `tests/test_history_replay.py` 与 `tests/test_log.py` 回归；409 tests passed。→ [sessions/2026-05-01-interview-prep.md](sessions/2026-05-01-interview-prep.md)

@@ -238,6 +238,7 @@ def _cmd_compact(ctx: CommandContext, args: str) -> None:
             return
         window = context_window_for(ctx.settings.model)
         target = int(window * 0.3)  # 目标释放约 30% 窗口
+        log.info("正在裁剪早期工具结果……")
         new_msgs, freed, count = micro_compact(
             msgs,
             target_free_tokens=max(target, 1),
@@ -264,7 +265,8 @@ def _cmd_compact(ctx: CommandContext, args: str) -> None:
         log.dim("（消息太少，无法压缩。）")
         return
     pre = estimate_tokens(msgs)
-    log.dim(f"正在压缩 {len(msgs)} 条消息（约 {pre:,} tokens）…")
+    log.info("正在压缩中……")
+    log.dim(f"  {len(msgs)} 条消息 · 约 {pre:,} tokens")
     try:
         new_msgs, _summary = ctx.compact_service.compact(
             msgs,
