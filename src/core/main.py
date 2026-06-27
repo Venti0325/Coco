@@ -973,7 +973,12 @@ def entry() -> None:
                 else:
                     md_live.update(renderable)
 
-        def _on_tool_call(name: str, inp: dict) -> None:
+        def _on_tool_event(event: dict) -> None:
+            if event.get("type") != "tool_call":
+                return
+            name = str(event.get("name") or "")
+            raw_inp = event.get("input")
+            inp = raw_inp if isinstance(raw_inp, dict) else {}
             _flush_buffer_to_scrollback()
             _stop_spinner()
             _streaming[0] = False
@@ -1009,7 +1014,7 @@ def entry() -> None:
                     text,
                     prior_messages=chat_messages or None,
                     on_text_chunk=_on_text_chunk,
-                    on_tool_call=_on_tool_call,
+                    on_tool_event=_on_tool_event,
                 )
                 turn_success = True
             except AbortedError:

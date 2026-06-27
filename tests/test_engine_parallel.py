@@ -269,6 +269,45 @@ def test_parallel_execution_preserves_result_order():
     assert [b["content"] for b in blocks] == ["ok:A", "ok:B", "ok:C", "ok:D"]
 
 
+def test_parallel_tool_events_emit_calls_before_results_in_model_order():
+    llm = _make_llm_mock(
+        [
+            LLMResponse(
+                content=[
+                    _tool_use_block("t1", "Read", {"tag": "slow", "sleep_ms": 80}),
+                    _tool_use_block("t2", "Read", {"tag": "fast", "sleep_ms": 5}),
+                    _tool_use_block("t3", "Read", {"tag": "mid", "sleep_ms": 30}),
+                ],
+                usage=TokenUsage(),
+            ),
+            LLMResponse(content=[{"type": "text", "text": "done"}]),
+        ]
+    )
+    events: list[dict] = []
+    eng = Engine(
+        llm,
+        [_SleepReadTool("Read")],
+        permissions=PermissionChecker(auto_approve=True),
+    )
+
+    eng.run("go", on_tool_event=events.append)
+
+    assert [(event["type"], event["id"]) for event in events] == [
+        ("tool_call", "t1"),
+        ("tool_call", "t2"),
+        ("tool_call", "t3"),
+        ("tool_result", "t1"),
+        ("tool_result", "t2"),
+        ("tool_result", "t3"),
+    ]
+    assert [event.get("output") for event in events if event["type"] == "tool_result"] == [
+        "ok:slow",
+        "ok:fast",
+        "ok:mid",
+    ]
+    assert all(event["success"] is True for event in events if event["type"] == "tool_result")
+
+
 def test_parallel_exception_isolated():
     """并发批中一个工具抛异常，其他工具仍正常返回；异常工具写回 Error body。"""
     llm = _make_llm_mock(
@@ -305,6 +344,45 @@ def test_parallel_exception_isolated():
     assert blocks[0]["content"] == "ok:good1"
     assert "Error:" in blocks[1]["content"] and "boom" in blocks[1]["content"]
     assert blocks[2]["content"] == "ok:good2"
+
+
+def test_parallel_tool_event_marks_exception_result_as_failure():
+    llm = _make_llm_mock(
+        [
+            LLMResponse(
+                content=[
+                    _tool_use_block("t1", "Read", {"tag": "good"}),
+                    _tool_use_block("t2", "Read", {"tag": "bad"}),
+                ],
+                usage=TokenUsage(),
+            ),
+            LLMResponse(content=[{"type": "text", "text": "done"}]),
+        ]
+    )
+    events: list[dict] = []
+    eng = Engine(
+        llm,
+        [_RaiseTool(fail_on_tag="bad")],
+        permissions=PermissionChecker(auto_approve=True),
+    )
+
+    result = eng.run("explore", on_tool_event=events.append)
+
+    results = [event for event in events if event["type"] == "tool_result"]
+    assert [(event["id"], event["success"]) for event in results] == [
+        ("t1", True),
+        ("t2", False),
+    ]
+    assert "boom" in results[1]["output"]
+    tool_result_msg = next(
+        m for m in result.messages
+        if m["role"] == "user" and isinstance(m.get("content"), list)
+        and all(
+            isinstance(b, dict) and b.get("type") == "tool_result"
+            for b in m["content"]
+        )
+    )
+    assert tool_result_msg["content"][1]["is_error"] is True
 
 
 def test_write_tool_always_serial():

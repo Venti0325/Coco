@@ -15,7 +15,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from .llm import LLMClient
 from .models import AbortedError, TokenUsage
@@ -134,16 +134,20 @@ def _partition_tool_calls(
     return batches
 
 
+EngineToolEvent = dict[str, Any]
+ToolEventCallback = Callable[[EngineToolEvent], None]
+
+
 def _execute_one_tool(
     tb: dict,
     by_name: dict[str, Tool],
     allowed_tools: set[str] | None,
     permissions: PermissionChecker,
     path_check: Callable[[str, dict], tuple[bool, str]],
-) -> tuple[str, str, dict, float]:
-    """执行单个 tool_block；返回 ``(tool_use_id, body, input, elapsed_ms)``。
+) -> tuple[str, str, dict, float, bool]:
+    """执行单个 tool_block；返回 ``(tool_use_id, body, input, elapsed_ms, success)``。
 
-    本函数为自由函数，不接触 Engine 的共享可变状态（tool_log、on_tool_call 等
+    本函数为自由函数，不接触 Engine 的共享可变状态（tool_log、on_tool_event 等
     都在主线程按序触发），因此可安全地在 ThreadPoolExecutor 里并发调用。
     """
     tid = str(tb.get("id", ""))
@@ -153,33 +157,90 @@ def _execute_one_tool(
 
     start = time.monotonic()
 
-    def _finish(body: str) -> tuple[str, str, dict, float]:
+    def _finish(body: str, success: bool) -> tuple[str, str, dict, float, bool]:
         if not isinstance(body, str):
             body = str(body)
         elapsed_ms = (time.monotonic() - start) * 1000.0
-        return tid, body, inp, elapsed_ms
+        return tid, body, inp, elapsed_ms, success
 
     tool = by_name.get(name)
     if tool is None:
-        return _finish(f"Error: unknown tool {name!r}")
+        return _finish(f"Error: unknown tool {name!r}", False)
     if allowed_tools is not None and name not in allowed_tools:
         allowed = ", ".join(sorted(allowed_tools))
         return _finish(
-            f"Error: tool {name!r} is not allowed in this context. Allowed: {allowed}"
+            f"Error: tool {name!r} is not allowed in this context. Allowed: {allowed}",
+            False,
         )
     ok, msg = path_check(name, inp)
     if not ok:
-        return _finish(msg)
+        return _finish(msg, False)
     # 防御式：并发组内的工具应当满足 is_read_only（permissions.check 对只读直接
     # 返回 allow），非只读走到这里必定是串行分支，权限确认仍由主线程同步发起。
     if not tool.is_read_only and permissions.check(tool, inp) == "deny":
-        return _finish("Error: User denied permission to run this tool.")
+        return _finish("Error: User denied permission to run this tool.", False)
     try:
         out = tool.invoke(inp)
     except Exception as exc:  # 工具内部抛异常也算失败，写回 Error body
-        return _finish(f"Error: tool raised exception: {exc!r}")
+        return _finish(f"Error: tool raised exception: {exc!r}", False)
     body = out.content if out.success else (out.error or out.content or "Error")
-    return _finish(body)
+    return _finish(body, bool(out.success))
+
+
+def _tool_call_payload(tb: dict) -> tuple[str, str, dict]:
+    raw_in = tb.get("input")
+    inp = raw_in if isinstance(raw_in, dict) else {}
+    return str(tb.get("id", "")), str(tb.get("name", "")), inp
+
+
+def _emit_tool_call(
+    on_tool_event: ToolEventCallback | None,
+    tool_id: str,
+    name: str,
+    inp: dict,
+) -> None:
+    if on_tool_event is None:
+        return
+    on_tool_event({
+        "type": "tool_call",
+        "id": tool_id,
+        "name": name,
+        "input": inp,
+    })
+
+
+def _emit_tool_result(
+    on_tool_event: ToolEventCallback | None,
+    *,
+    tool_id: str,
+    name: str,
+    inp: dict,
+    output: str,
+    elapsed_ms: float,
+    success: bool,
+) -> None:
+    if on_tool_event is None:
+        return
+    on_tool_event({
+        "type": "tool_result",
+        "id": tool_id,
+        "name": name,
+        "input": inp,
+        "output": output,
+        "elapsed_ms": elapsed_ms,
+        "success": success,
+    })
+
+
+def _tool_result_block(tool_id: str, body: str, success: bool) -> dict:
+    block = {
+        "type": "tool_result",
+        "tool_use_id": tool_id,
+        "content": body,
+    }
+    if not success:
+        block["is_error"] = True
+    return block
 
 
 class Engine:
@@ -249,14 +310,14 @@ class Engine:
         *,
         prior_messages: list[dict] | None = None,
         on_text_chunk: Callable[[str], None] | None = None,
-        on_tool_call: Callable[[str, dict], None] | None = None,
+        on_tool_event: ToolEventCallback | None = None,
     ) -> EngineResult:
         self._abort_event.clear()
         return self._run_tool_loop(
             user_text,
             prior_messages=prior_messages,
             on_text_chunk=on_text_chunk,
-            on_tool_call=on_tool_call,
+            on_tool_event=on_tool_event,
         )
 
     def _path_allowed_for_tool(self, tool_name: str, inp: dict) -> tuple[bool, str]:
@@ -323,35 +384,37 @@ class Engine:
         index_by_id: dict[int, int],
         result_blocks: list[dict | None],
         tool_log: list[str],
-        on_tool_call: Callable[[str, dict], None] | None,
+        on_tool_event: ToolEventCallback | None,
     ) -> float:
         """串行执行一批工具调用（用于单工具或非并发安全工具）。
 
-        日志与回调在执行前按输入顺序触发，保留当前交互式 UI 体验。
+        tool_call 在执行前按输入顺序触发，tool_result 在执行后触发。
         返回本批次累加的 tool time（毫秒），供 ``_run_tool_loop`` 汇总。
         """
         batch_time_ms = 0.0
         for tb in batch:
-            name = str(tb.get("name", ""))
-            raw_in = tb.get("input")
-            inp = raw_in if isinstance(raw_in, dict) else {}
-            if on_tool_call is not None:
-                on_tool_call(name, inp)
-            tid, body, _, elapsed_ms = _execute_one_tool(
+            declared_tid, name, inp = _tool_call_payload(tb)
+            _emit_tool_call(on_tool_event, declared_tid, name, inp)
+            tid, body, _, elapsed_ms, success = _execute_one_tool(
                 tb,
                 self._by_name,
                 self._allowed_tools,
                 self._permissions,
                 self._path_allowed_for_tool,
             )
+            _emit_tool_result(
+                on_tool_event,
+                tool_id=tid,
+                name=name,
+                inp=inp,
+                output=body,
+                elapsed_ms=elapsed_ms,
+                success=success,
+            )
             batch_time_ms += elapsed_ms
             tool_log.append(_tool_line(name, inp, elapsed_ms))
             idx = index_by_id[id(tb)]
-            result_blocks[idx] = {
-                "type": "tool_result",
-                "tool_use_id": tid,
-                "content": body,
-            }
+            result_blocks[idx] = _tool_result_block(tid, body, success)
         return batch_time_ms
 
     def _run_batch_parallel(
@@ -360,18 +423,22 @@ class Engine:
         index_by_id: dict[int, int],
         result_blocks: list[dict | None],
         tool_log: list[str],
-        on_tool_call: Callable[[str, dict], None] | None,
+        on_tool_event: ToolEventCallback | None,
     ) -> float:
         """并发执行一批只读工具调用。
 
         - ThreadPoolExecutor 按 ``min(len(batch), max_tool_concurrency)`` 开 worker
         - ``as_completed`` 取结果；任何工具异常被 ``_execute_one_tool`` 吸收，
           或在极端情况下在这里兜底包装成 error body
-        - ``tool_log`` / ``on_tool_call`` 按输入顺序在批次完成后统一触发，避免交错
+        - ``tool_call`` 在执行前按输入顺序触发；``tool_result`` 与 tool_log
+          在批次完成后按同一顺序触发，避免完成顺序打乱 transcript
         """
         workers = min(len(batch), self._max_tool_concurrency)
+        for tb in batch:
+            tool_id, name, inp = _tool_call_payload(tb)
+            _emit_tool_call(on_tool_event, tool_id, name, inp)
         # 子任务独立返回结果；先在本地收集，再按原序回写与打日志。
-        per_block: dict[int, tuple[str, str, float]] = {}
+        per_block: dict[int, tuple[str, str, dict, float, bool]] = {}
         batch_start = time.monotonic()
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=workers,
@@ -391,33 +458,37 @@ class Engine:
             for fut in concurrent.futures.as_completed(future_to_tb):
                 tb = future_to_tb[fut]
                 try:
-                    tid, body, _, elapsed_ms = fut.result()
+                    tid, body, inp, elapsed_ms, success = fut.result()
                 except Exception as exc:  # 兜底：_execute_one_tool 内部已捕获，这里防线程层异常
                     tid = str(tb.get("id", ""))
+                    raw_in = tb.get("input")
+                    inp = raw_in if isinstance(raw_in, dict) else {}
                     body = f"Error: tool raised exception: {exc!r}"
                     elapsed_ms = 0.0
-                per_block[id(tb)] = (tid, body, elapsed_ms)
+                    success = False
+                per_block[id(tb)] = (tid, body, inp, elapsed_ms, success)
 
         batch_elapsed_ms = (time.monotonic() - batch_start) * 1000.0
 
-        # 按输入顺序触发回调、写日志、回填 result_blocks，避免完成顺序打乱语义。
+        # 按输入顺序触发 result 回调、写日志、回填 result_blocks，避免完成顺序打乱语义。
         max_individual_ms = 0.0
         for tb in batch:
             name = str(tb.get("name", ""))
-            raw_in = tb.get("input")
-            inp = raw_in if isinstance(raw_in, dict) else {}
-            tid, body, elapsed_ms = per_block[id(tb)]
+            tid, body, inp, elapsed_ms, success = per_block[id(tb)]
             if elapsed_ms > max_individual_ms:
                 max_individual_ms = elapsed_ms
-            if on_tool_call is not None:
-                on_tool_call(name, inp)
+            _emit_tool_result(
+                on_tool_event,
+                tool_id=tid,
+                name=name,
+                inp=inp,
+                output=body,
+                elapsed_ms=elapsed_ms,
+                success=success,
+            )
             tool_log.append(_tool_line(name, inp, elapsed_ms))
             idx = index_by_id[id(tb)]
-            result_blocks[idx] = {
-                "type": "tool_result",
-                "tool_use_id": tid,
-                "content": body,
-            }
+            result_blocks[idx] = _tool_result_block(tid, body, success)
 
         tool_log.append(
             f"[batch] {len(batch)} tools ran concurrently in "
@@ -433,7 +504,7 @@ class Engine:
         *,
         prior_messages: list[dict] | None = None,
         on_text_chunk: Callable[[str], None] | None = None,
-        on_tool_call: Callable[[str, dict], None] | None = None,
+        on_tool_event: ToolEventCallback | None = None,
     ) -> EngineResult:
         messages: list[dict] = list(prior_messages or []) + [
             {"role": "user", "content": user_text}
@@ -487,7 +558,7 @@ class Engine:
                         index_by_id,
                         result_blocks,
                         tool_log,
-                        on_tool_call,
+                        on_tool_event,
                     )
                 else:
                     # 单个工具 or 非并发安全工具 → 串行路径
@@ -496,7 +567,7 @@ class Engine:
                         index_by_id,
                         result_blocks,
                         tool_log,
-                        on_tool_call,
+                        on_tool_event,
                     )
 
             messages.append({"role": "user", "content": result_blocks})

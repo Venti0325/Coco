@@ -117,6 +117,80 @@ def test_engine_one_tool_then_text():
     assert result.messages[-1]["role"] == "assistant"
 
 
+def test_engine_emits_ordered_tool_events_between_text_chunks():
+    llm = _make_llm_mock(
+        [
+            LLMResponse(
+                content=[
+                    {"type": "text", "text": "I will inspect."},
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "Echo",
+                        "input": {"message": "x"},
+                    },
+                ],
+            ),
+            LLMResponse(content=[{"type": "text", "text": "done"}]),
+        ]
+    )
+    events: list[tuple[str, str, str | None, bool | None]] = []
+    eng = Engine(llm, [EchoTool()], permissions=PermissionChecker(auto_approve=True))
+
+    result = eng.run(
+        "call echo",
+        on_text_chunk=lambda chunk: events.append(("text", chunk, None, None)),
+        on_tool_event=lambda event: events.append((
+            event["type"],
+            event["id"],
+            event.get("output"),
+            event.get("success"),
+        )),
+    )
+
+    assert result.answer == "done"
+    assert events == [
+        ("text", "I will inspect.", None, None),
+        ("tool_call", "t1", None, None),
+        ("tool_result", "t1", "Echo: x", True),
+        ("text", "done", None, None),
+    ]
+
+
+def test_engine_tool_event_reports_structured_failure_and_marks_result_block():
+    llm = _make_llm_mock(
+        [
+            LLMResponse(
+                content=[
+                    {
+                        "type": "tool_use",
+                        "id": "missing-1",
+                        "name": "MissingTool",
+                        "input": {"message": "x"},
+                    },
+                ],
+            ),
+            LLMResponse(content=[{"type": "text", "text": "ok"}]),
+        ]
+    )
+    events: list[dict] = []
+    eng = Engine(llm, [EchoTool()], permissions=PermissionChecker(auto_approve=True))
+
+    result = eng.run("call missing", on_tool_event=events.append)
+
+    assert [event["type"] for event in events] == ["tool_call", "tool_result"]
+    assert events[0]["id"] == "missing-1"
+    assert events[0]["name"] == "MissingTool"
+    assert events[1]["id"] == "missing-1"
+    assert events[1]["success"] is False
+    assert "unknown tool" in events[1]["output"]
+    tool_result_msg = next(
+        message for message in result.messages
+        if message["role"] == "user" and isinstance(message.get("content"), list)
+    )
+    assert tool_result_msg["content"][0]["is_error"] is True
+
+
 def test_engine_prior_messages_continues_thread():
     llm = _make_llm_mock(
         [
