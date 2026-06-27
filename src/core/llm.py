@@ -461,9 +461,13 @@ def _extract_openai_usage(raw: Any) -> TokenUsage | None:
     """从 OpenAI 响应中提取 token 用量。"""
     if raw is None:
         return None
+    prompt_tokens_details = _attr(raw, "prompt_tokens_details", {}) or {}
+    openai_cached_tokens = _attr(prompt_tokens_details, "cached_tokens", 0) or 0
+    deepseek_cache_hit_tokens = _attr(raw, "prompt_cache_hit_tokens", 0) or 0
     return TokenUsage(
         input_tokens=int(_attr(raw, "prompt_tokens", 0) or 0),
         output_tokens=int(_attr(raw, "completion_tokens", 0) or 0),
+        cache_read=int(deepseek_cache_hit_tokens or openai_cached_tokens or 0),
     )
 
 

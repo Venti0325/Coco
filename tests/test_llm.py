@@ -5,6 +5,7 @@ from __future__ import annotations
 from core.llm import (
     LLMClient,
     _build_openai_chat_request,
+    _extract_openai_usage,
     _openai_supports_reasoning_effort,
     _tool_schema_to_openai,
     _to_openai_messages,
@@ -91,6 +92,33 @@ def test_openai_reasoning_effort_flag():
     assert _openai_supports_reasoning_effort("o1-mini") is True
     assert _openai_supports_reasoning_effort("gpt-4.1-mini") is False
     assert _openai_supports_reasoning_effort("qwen-plus") is False
+
+
+def test_extract_openai_usage_preserves_openai_cached_tokens():
+    usage = _extract_openai_usage({
+        "prompt_tokens": 100,
+        "completion_tokens": 12,
+        "prompt_tokens_details": {"cached_tokens": 40},
+    })
+
+    assert usage is not None
+    assert usage.input_tokens == 100
+    assert usage.output_tokens == 12
+    assert usage.cache_read == 40
+
+
+def test_extract_openai_usage_preserves_deepseek_cache_hits():
+    usage = _extract_openai_usage({
+        "prompt_tokens": 100,
+        "completion_tokens": 12,
+        "prompt_cache_hit_tokens": 25,
+        "prompt_cache_miss_tokens": 75,
+    })
+
+    assert usage is not None
+    assert usage.input_tokens == 100
+    assert usage.output_tokens == 12
+    assert usage.cache_read == 25
 
 
 # ── OpenRouter 接入测试 ──────────────────────────────────────────────────
