@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import os
 import re
+import select
+import signal
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +16,7 @@ from .base import Tool, ToolOutcome, ToolSpec
 
 _DEFAULT_TIMEOUT = 120
 _MAX_OUTPUT_CHARS = 20_000
+_DRAIN_TIMEOUT_SEC = 0.25
 _IS_WINDOWS = sys.platform == "win32"
 
 
@@ -91,6 +97,60 @@ def _truncate(text: str, *, limit: int = _MAX_OUTPUT_CHARS) -> tuple[str, bool]:
     return text[: limit - 80] + "\n...[truncated]...\n", True
 
 
+def _has_unquoted_background_operator(command: str) -> bool:
+    """粗略识别 shell 里的后台 ``&`` 运算符，忽略 ``&&`` 和 ``2>&1``。
+
+    这里不是完整 shell parser；目标是拦截模型常见的 ``nohup ... &`` /
+    ``cmd & echo PID`` 这类长期任务写法，避免普通 Shell 产生未登记后台进程。
+    """
+    quote: str | None = None
+    escaped = False
+    for i, ch in enumerate(command):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\" and quote != "'":
+            escaped = True
+            continue
+        if quote:
+            if ch == quote:
+                quote = None
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            continue
+        if ch != "&":
+            continue
+        prev_ch = command[i - 1] if i > 0 else ""
+        next_ch = command[i + 1] if i + 1 < len(command) else ""
+        if prev_ch in ("&", ">") or next_ch == "&":
+            continue
+        return True
+    return False
+
+
+def looks_like_background_command(command: str) -> bool:
+    """是否像长期/后台 shell 命令。
+
+    普通 Shell 不负责长期任务生命周期；这些命令应使用 BackgroundShell，
+    由工具登记 job、日志、端口 URL，并在后续 turn 注入状态。
+    """
+    c = _normalize_command(command).lower()
+    if not c:
+        return False
+    if _has_unquoted_background_operator(command):
+        return True
+    patterns = (
+        r"(?:^|[;&|]\s*)nohup\b",
+        r"(?:^|[;&|]\s*)setsid\b",
+        r"(?:^|[;&|]\s*)disown\b",
+        r"(?:^|[;&|]\s*)daemonize\b",
+        r"(?:^|[;&|]\s*)tmux\s+new(?:-session)?\b.*\s-d\b",
+        r"(?:^|[;&|]\s*)screen\b.*\s-d\s*-m\b",
+    )
+    return any(re.search(pattern, c) for pattern in patterns)
+
+
 def _is_dangerous(command: str) -> str | None:
     low = command.lower()
 
@@ -137,6 +197,152 @@ def _is_allowed_by_prefix(command: str) -> str | None:
 def is_allowlisted_command(command: str) -> bool:
     """是否命中允许的命令前缀白名单。"""
     return _is_allowed_by_prefix(command) is None
+
+
+def _reader_thread(stream, sink: list[str]) -> None:
+    try:
+        while True:
+            chunk = stream.read(4096)
+            if not chunk:
+                return
+            sink.append(chunk)
+    except (OSError, ValueError):
+        return
+
+
+def _terminate_process(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        if _IS_WINDOWS:
+            proc.kill()
+        else:
+            os.killpg(proc.pid, signal.SIGTERM)
+    except Exception:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=1)
+        return
+    except Exception:
+        pass
+    try:
+        if _IS_WINDOWS:
+            proc.kill()
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _run_shell_command(command: str, *, cwd: Path, timeout_s: int) -> tuple[int, str, str]:
+    if not _IS_WINDOWS:
+        return _run_shell_command_posix(command, cwd=cwd, timeout_s=timeout_s)
+
+    popen_kwargs: dict[str, Any] = {}
+
+    proc = subprocess.Popen(
+        [*_SHELL_PREFIX, command],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(cwd),
+        **popen_kwargs,
+    )
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+    threads = [
+        threading.Thread(target=_reader_thread, args=(proc.stdout, stdout_parts), daemon=True),
+        threading.Thread(target=_reader_thread, args=(proc.stderr, stderr_parts), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+
+    try:
+        returncode = proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        _terminate_process(proc)
+        raise
+
+    deadline = time.monotonic() + _DRAIN_TIMEOUT_SEC
+    for thread in threads:
+        remaining = max(0.0, deadline - time.monotonic())
+        thread.join(remaining)
+
+    # If an accidental background child inherited the pipe, do not wait for EOF.
+    for stream in (proc.stdout, proc.stderr):
+        try:
+            stream.close()
+        except Exception:
+            pass
+    for thread in threads:
+        thread.join(0.05)
+
+    return returncode, "".join(stdout_parts), "".join(stderr_parts)
+
+
+def _drain_fd(fd: int, *, deadline: float) -> str:
+    chunks: list[bytes] = []
+    os.set_blocking(fd, False)
+    while time.monotonic() < deadline:
+        timeout = max(0.0, deadline - time.monotonic())
+        readable, _, _ = select.select([fd], [], [], timeout)
+        if not readable:
+            break
+        try:
+            data = os.read(fd, 8192)
+        except BlockingIOError:
+            continue
+        except OSError:
+            break
+        if not data:
+            break
+        chunks.append(data)
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def _run_shell_command_posix(command: str, *, cwd: Path, timeout_s: int) -> tuple[int, str, str]:
+    stdout_r, stdout_w = os.pipe()
+    stderr_r, stderr_w = os.pipe()
+    proc: subprocess.Popen[Any] | None = None
+    try:
+        proc = subprocess.Popen(
+            [*_SHELL_PREFIX, command],
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_w,
+            stderr=stderr_w,
+            cwd=str(cwd),
+            start_new_session=True,
+            close_fds=True,
+        )
+        os.close(stdout_w)
+        os.close(stderr_w)
+        stdout_w = -1
+        stderr_w = -1
+        try:
+            returncode = proc.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            _terminate_process(proc)
+            raise
+        deadline = time.monotonic() + _DRAIN_TIMEOUT_SEC
+        stdout = _drain_fd(stdout_r, deadline=deadline)
+        stderr = _drain_fd(stderr_r, deadline=deadline)
+        return returncode, stdout, stderr
+    finally:
+        for fd in (stdout_r, stdout_w, stderr_r, stderr_w):
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
 
 
 class ShellTool(Tool):
@@ -192,6 +398,16 @@ class ShellTool(Tool):
                 success=False,
                 content=f"Error: blocked dangerous command ({reason}).",
             )
+        if looks_like_background_command(command):
+            return ToolOutcome(
+                success=False,
+                content=(
+                    "Error: background command detected. Use BackgroundShell for "
+                    "long-running or asynchronous tasks so Coco can track the job, "
+                    "logs, status, and exposed URLs. Pass the foreground command "
+                    "to BackgroundShell without nohup, disown, or '&'."
+                ),
+            )
 
         # cwd: default workspace root; allow relative paths under workspace
         cwd = self._workspace
@@ -215,18 +431,8 @@ class ShellTool(Tool):
             cwd = p
 
         try:
-            result = subprocess.run(
-                [*_SHELL_PREFIX, command],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout_s,
-                cwd=str(cwd),
-            )
+            returncode, stdout, stderr = _run_shell_command(command, cwd=cwd, timeout_s=timeout_s)
             parts: list[str] = []
-            stdout = result.stdout or ""
-            stderr = result.stderr or ""
             out_text, out_trunc = _truncate(stdout.rstrip())
             err_text, err_trunc = _truncate(stderr.rstrip())
 
@@ -235,14 +441,14 @@ class ShellTool(Tool):
             if err_text:
                 parts.append(f"[stderr]\n{err_text}")
 
-            if result.returncode != 0:
-                parts.append(f"[exit code: {result.returncode}]")
+            if returncode != 0:
+                parts.append(f"[exit code: {returncode}]")
 
             return ToolOutcome(
-                success=(result.returncode == 0),
+                success=(returncode == 0),
                 content="\n".join(parts) if parts else "(no output)",
                 metadata={
-                    "exit_code": result.returncode,
+                    "exit_code": returncode,
                     "truncated_stdout": out_trunc,
                     "truncated_stderr": err_trunc,
                     "cwd": str(cwd),

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
+from core.tools.background_shell import BackgroundShellTool
 from core.tools.file_edit import FileEditTool
 from core.tools.file_read import FileReadTool
 from core.tools.file_write import FileWriteTool
@@ -156,8 +158,7 @@ def test_file_write_is_not_read_only():
 
 
 def test_shell_success_simple_command():
-    # command allowlist does not include Write-Output; use an allowlisted command
-    r = ShellTool(Path.cwd()).invoke({"command": "python -m pip --version"})
+    r = ShellTool(Path.cwd()).invoke({"command": "python --version"})
     assert r.success
 
 
@@ -201,6 +202,31 @@ def test_shell_blocks_command_not_in_allowlist():
     assert "hi" in r.content.lower()
 
 
+def test_shell_rejects_background_commands():
+    r = ShellTool(Path.cwd()).invoke({
+        "command": 'cd /workspace && nohup python3 app.py > /tmp/flask.log 2>&1 & echo "PID: $!"',
+    })
+    assert not r.success
+    assert "background command detected" in r.content
+    assert "BackgroundShell" in r.content
+
+
+def test_shell_does_not_wait_for_inherited_background_pipe(tmp_path: Path):
+    script = tmp_path / "spawn_child.py"
+    script.write_text(
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-c', \"import time; print('child ready', flush=True); time.sleep(2)\"])\n"
+        "print('parent done')\n",
+        encoding="utf-8",
+    )
+    start = time.monotonic()
+    r = ShellTool(tmp_path).invoke({"command": f'"{sys.executable}" spawn_child.py', "timeout": 1})
+    elapsed = time.monotonic() - start
+    assert r.success
+    assert "parent done" in r.content
+    assert elapsed < 1.0
+
+
 def test_shell_cwd_must_be_inside_workspace(tmp_path: Path):
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -214,5 +240,48 @@ def test_shell_cwd_must_be_inside_workspace(tmp_path: Path):
 def test_shell_cwd_relative_under_workspace(tmp_path: Path):
     ws = tmp_path / "ws"
     (ws / "sub").mkdir(parents=True)
-    r = ShellTool(ws).invoke({"command": "python -m pip --version", "cwd": "sub"})
+    r = ShellTool(ws).invoke({"command": "python --version", "cwd": "sub"})
     assert r.success
+
+
+def test_background_shell_starts_tracks_and_exposes_urls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    script = ws / "job.py"
+    script.write_text(
+        "import time\n"
+        "print('ready', flush=True)\n"
+        "time.sleep(0.2)\n"
+        "print('done', flush=True)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("COCO_BACKGROUND_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setenv("COCO_PORT_URL_TEMPLATE", "https://{port}-sandbox.example.test")
+
+    tool = BackgroundShellTool(ws)
+    start_result = tool.invoke({
+        "command": f'"{sys.executable}" job.py',
+        "name": "test-job",
+        "ports": [5000],
+        "wait_ms": 2000,
+    })
+
+    assert start_result.success
+    assert "Background job started" in start_result.content
+    assert "https://5000-sandbox.example.test" in start_result.content
+    job = start_result.metadata["job"]
+    job_id = job["jobId"]
+
+    status_result = tool.invoke({"action": "status", "job_id": job_id, "wait_ms": 3000})
+    assert status_result.success
+    assert "status: completed" in status_result.content
+    assert "ready" in status_result.content
+    assert "done" in status_result.content
+
+
+def test_background_shell_rejects_double_backgrounding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("COCO_BACKGROUND_JOBS_DIR", str(tmp_path / "jobs"))
+    tool = BackgroundShellTool(tmp_path)
+    r = tool.invoke({"command": "nohup python3 app.py > /tmp/app.log 2>&1 &"})
+    assert not r.success
+    assert "foreground command" in r.content

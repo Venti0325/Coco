@@ -2,7 +2,7 @@
 
 策略：
 - 只裁剪 "user" 消息里 ``type == "tool_result"`` 的 block
-- 仅裁剪 ``COMPACTABLE_TOOLS`` 集合里的工具（Read/Glob/Grep/Shell）
+- 仅裁剪 ``COMPACTABLE_TOOLS`` 集合里的工具（Read/Glob/Grep/Shell/BackgroundShell）
 - 从最早开始裁，直到释放足够 token 或耗尽可裁目标
 - 保留最近 ``recent_turns_kept`` 轮（默认 3 轮）以内的任何工具结果不碰
 - 返回 ``(裁剪后 messages, 释放 token 数, 被裁条目数)``
@@ -20,7 +20,7 @@ from .compact import estimate_tokens
 # 可被裁剪的工具名单——只动读取/搜索类输出，不动 Edit/Write（它们的结果通常是
 # 简短确认文本，也没有"重新跑一遍"的语义）。
 COMPACTABLE_TOOLS: frozenset[str] = frozenset({
-    "Read", "Glob", "Grep", "Shell",
+    "Read", "Glob", "Grep", "Shell", "BackgroundShell",
 })
 
 # 默认保护区：最近 N 轮 assistant 之后的消息一律不动。

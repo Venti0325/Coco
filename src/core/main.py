@@ -43,6 +43,7 @@ from core.llm import LLMClient
 from core.permissions import PermissionChecker
 from core.island import DynamicIsland
 from core.tools import (
+    BackgroundShellTool,
     FileEditTool,
     FileReadTool,
     FileWriteTool,
@@ -275,6 +276,13 @@ def _tool_preview(name: str, inp: dict) -> str:
     if name == "Shell":
         cmd = str(inp.get("command", ""))
         return (cmd[:80] + "…") if len(cmd) > 80 else cmd
+    if name == "BackgroundShell":
+        action = str(inp.get("action") or "start")
+        if action == "start":
+            cmd = str(inp.get("command", ""))
+            return (cmd[:80] + "…") if len(cmd) > 80 else cmd
+        job_id = inp.get("jobId")
+        return f"{action} {job_id}" if job_id else action
     if name in ("Read", "Write", "Edit"):
         fp = str(inp.get("file_path", ""))
         return ("…" + fp[-58:]) if len(fp) > 60 else fp
@@ -838,6 +846,7 @@ def entry() -> None:
             GlobTool(),
             GrepTool(),
             ShellTool(ws),
+            BackgroundShellTool(ws),
             FileWriteTool(),
             FileEditTool(),
         ]

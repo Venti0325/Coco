@@ -76,7 +76,7 @@ class PermissionChecker:
             pass
 
         log.warn(f"需要确认非只读工具: {tool.spec.name}")
-        if tool.spec.name == "Shell":
+        if tool.spec.name in {"Shell", "BackgroundShell"}:
             cmd = str(inputs.get("command", "") or "")
             try:
                 from .tools.shell import is_allowlisted_command
