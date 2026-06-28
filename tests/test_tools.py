@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from core.tools import shell as shell_module
 from core.tools.background_shell import BackgroundShellTool
 from core.tools.file_edit import FileEditTool
 from core.tools.file_read import FileReadTool
@@ -209,6 +210,19 @@ def test_shell_rejects_background_commands():
     assert not r.success
     assert "background command detected" in r.content
     assert "BackgroundShell" in r.content
+
+
+def test_windows_shell_prepares_quoted_executables(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(shell_module, "_IS_WINDOWS", True)
+    assert (
+        shell_module._prepare_shell_command('"C:\\Python\\python.exe" job.py')
+        == '& "C:\\Python\\python.exe" job.py'
+    )
+    assert (
+        shell_module._prepare_shell_command('& "C:\\Python\\python.exe" job.py')
+        == '& "C:\\Python\\python.exe" job.py'
+    )
+    assert not shell_module.looks_like_background_command('& "C:\\Python\\python.exe" job.py')
 
 
 def test_shell_does_not_wait_for_inherited_background_pipe(tmp_path: Path):

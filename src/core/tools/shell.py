@@ -103,6 +103,9 @@ def _has_unquoted_background_operator(command: str) -> bool:
     这里不是完整 shell parser；目标是拦截模型常见的 ``nohup ... &`` /
     ``cmd & echo PID`` 这类长期任务写法，避免普通 Shell 产生未登记后台进程。
     """
+    if _IS_WINDOWS:
+        # PowerShell uses & as the call operator, not as a background operator.
+        return False
     quote: str | None = None
     escaped = False
     for i, ch in enumerate(command):
@@ -149,6 +152,24 @@ def looks_like_background_command(command: str) -> bool:
         r"(?:^|[;&|]\s*)screen\b.*\s-d\s*-m\b",
     )
     return any(re.search(pattern, c) for pattern in patterns)
+
+
+def _prepare_shell_command(command: str) -> str:
+    """Return a command string suitable for the selected shell.
+
+    PowerShell treats a leading quoted path as a string expression; to execute it
+    with arguments, it must be prefixed with the call operator: ``& "path" arg``.
+    Bash/sh do not need this transformation.
+    """
+    if not _IS_WINDOWS:
+        return command
+    stripped = command.lstrip()
+    if not stripped or stripped.startswith(("&", ".")):
+        return command
+    if stripped[0] not in ("'", '"'):
+        return command
+    leading = command[: len(command) - len(stripped)]
+    return f"{leading}& {stripped}"
 
 
 def _is_dangerous(command: str) -> str | None:
@@ -241,6 +262,7 @@ def _terminate_process(proc: subprocess.Popen[str]) -> None:
 
 
 def _run_shell_command(command: str, *, cwd: Path, timeout_s: int) -> tuple[int, str, str]:
+    command = _prepare_shell_command(command)
     if not _IS_WINDOWS:
         return _run_shell_command_posix(command, cwd=cwd, timeout_s=timeout_s)
 

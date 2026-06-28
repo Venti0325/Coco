@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .shell import _IS_WINDOWS, _SHELL_PREFIX
+from .shell import _IS_WINDOWS, _SHELL_PREFIX, _prepare_shell_command
 
 
 def _now() -> str:
@@ -69,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
             log_file.write(f"[{_now()}] $ {command}\n")
             log_file.flush()
             proc = subprocess.Popen(
-                [*_SHELL_PREFIX, command],
+                [*_SHELL_PREFIX, _prepare_shell_command(command)],
                 stdin=subprocess.DEVNULL,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
