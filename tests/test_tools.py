@@ -226,6 +226,8 @@ def test_windows_shell_prepares_quoted_executables(monkeypatch: pytest.MonkeyPat
 
 
 def test_shell_does_not_wait_for_inherited_background_pipe(tmp_path: Path):
+    if sys.platform == "win32":
+        pytest.skip("PowerShell waits for descendant native processes; inherited-pipe drain behavior is POSIX-specific")
     script = tmp_path / "spawn_child.py"
     script.write_text(
         "import subprocess, sys\n"
