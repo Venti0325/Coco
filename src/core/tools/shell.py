@@ -14,7 +14,7 @@ from typing import Any
 
 from .base import Tool, ToolOutcome, ToolSpec
 
-_DEFAULT_TIMEOUT = 120
+_DEFAULT_TIMEOUT = 600
 _MAX_OUTPUT_CHARS = 20_000
 _DRAIN_TIMEOUT_SEC = 0.25
 _IS_WINDOWS = sys.platform == "win32"
@@ -378,7 +378,7 @@ class ShellTool(Tool):
             name="Shell",
             description=(
                 f"Execute a shell command ({shell_hint}). Returns stdout + stderr. "
-                "Timeout defaults to 120s. Avoid interactive commands."
+                "Timeout defaults to 600s. Avoid interactive commands."
             ),
             input_schema={
                 "type": "object",

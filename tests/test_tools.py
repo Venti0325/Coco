@@ -163,6 +163,12 @@ def test_shell_success_simple_command():
     assert r.success
 
 
+def test_shell_default_timeout_is_ten_minutes():
+    spec = ShellTool(Path.cwd()).spec
+    assert spec.input_schema["properties"]["timeout"]["default"] == 600
+    assert "600s" in spec.description
+
+
 def test_shell_nonzero_exit_code_includes_exit_code():
     r = ShellTool(Path.cwd()).invoke({"command": "pytest --version; exit 5"})
     assert not r.success
