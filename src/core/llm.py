@@ -545,6 +545,14 @@ def _user_content_blocks_to_openai(content: list[Any]) -> list[dict[str, Any]]:
             parts.append({"type": "text", "text": block.get("text", "")})
         elif btype == "image":
             source = block.get("source", {}) or {}
+            if source.get("type") == "url":
+                url = source.get("url", "")
+                if isinstance(url, str) and url:
+                    parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": url},
+                    })
+                continue
             media_type = source.get("media_type", "image/png")
             data = source.get("data", "")
             parts.append({

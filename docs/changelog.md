@@ -9,6 +9,10 @@
 
 ---
 
+## 2026-07-11
+
+- **(done)** 远程图片 URL 输入：统一 image block 支持 `source: {type: "url", url: ...}`；OpenAI-compatible provider 转为原生 `image_url`，Anthropic provider 沿用内部 URL source，不下载图片、不转 base64，并保留原有 base64 兼容。→ [sessions/2026-07-11-image-url-input.md](sessions/2026-07-11-image-url-input.md)
+
 ## 2026-05-02
 
 - **(done)** Windows asyncio / MCP：`src/core/windows_asyncio.py` 在 `main.py` 最早 import 后调用 `apply_windows_selector_event_loop_policy()`，保证进程内先有 Selector 策略再创建任意 asyncio loop（避免仅 MCP `BackgroundLoop` 线程设策略时，主线程或 httpx 等库先拿到 `ProactorEventLoop` 触发 `_overlapped ... pending`）。`mcp/_bridge.py`：模块级 `DEFAULT_RUN_TIMEOUT`（秒）、`run(timeout=None)` 使用该兜底、`TimeoutError` 后 `cancel` Future、`stop()` 默认 `join_timeout=5s`。`grep_tool.py`：Python 回退路径在遍历文件时增加整体墙钟上限（120s），超大目录早失败并提示安装 ripgrep。新增 `tests/test_windows_asyncio.py`；`tests/test_mcp_bridge.py` 补充 Selector / 默认超时用例。403 tests passed

@@ -75,6 +75,30 @@ def test_to_openai_messages_image_and_text_user():
     assert converted[0]["content"][1] == {"type": "text", "text": "describe this"}
 
 
+def test_to_openai_messages_remote_image_url():
+    image_url = "https://media.example/signed/image.png?token=secret"
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "url", "url": image_url},
+                },
+                {"type": "text", "text": "describe this"},
+            ],
+        }
+    ]
+
+    converted = _to_openai_messages(None, messages)
+
+    assert converted[0]["content"][0] == {
+        "type": "image_url",
+        "image_url": {"url": image_url},
+    }
+    assert converted[0]["content"][1] == {"type": "text", "text": "describe this"}
+
+
 def test_tool_schema_to_openai_wraps_function():
     tool = {
         "name": "Read",
