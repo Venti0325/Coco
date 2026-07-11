@@ -310,6 +310,7 @@ class Engine:
         user_text: str,
         *,
         prior_messages: list[dict] | None = None,
+        image_urls: list[str] | None = None,
         on_text_chunk: Callable[[str], None] | None = None,
         on_tool_event: ToolEventCallback | None = None,
     ) -> EngineResult:
@@ -317,6 +318,7 @@ class Engine:
         return self._run_tool_loop(
             user_text,
             prior_messages=prior_messages,
+            image_urls=image_urls,
             on_text_chunk=on_text_chunk,
             on_tool_event=on_tool_event,
         )
@@ -504,11 +506,19 @@ class Engine:
         user_text: str,
         *,
         prior_messages: list[dict] | None = None,
+        image_urls: list[str] | None = None,
         on_text_chunk: Callable[[str], None] | None = None,
         on_tool_event: ToolEventCallback | None = None,
     ) -> EngineResult:
+        user_content: str | list[dict] = user_text
+        if image_urls:
+            user_content = [
+                {"type": "image", "source": {"type": "url", "url": url}}
+                for url in image_urls
+            ]
+            user_content.append({"type": "text", "text": user_text})
         messages: list[dict] = list(prior_messages or []) + [
-            {"role": "user", "content": user_text}
+            {"role": "user", "content": user_content}
         ]
         tool_log: list[str] = []
         usage_acc: TokenUsage | None = None

@@ -7,8 +7,9 @@
 ## 计划
 
 1. 扩展 OpenAI-compatible 用户内容块转换，识别 Anthropic 风格的 URL image source。
-2. 保留现有 base64 image source 行为。
-3. 增加 URL 与 base64 的回归测试并运行完整测试集。
+2. 给 `Engine.run` 增加 `image_urls`，把图片与本轮文本放在同一个 user content 中。
+3. 保留现有 base64 image source 行为。
+4. 增加 URL、当前轮输入与 base64 的回归测试并运行完整测试集。
 
 ## 不做的事
 
@@ -24,5 +25,6 @@
 ## Summary
 
 - `src/core/llm.py` 现在把 `source.type == "url"` 的图片转换为 OpenAI-compatible `image_url`，不复制图片字节。
+- `Engine.run(..., image_urls=[...])` 把远程图片和本轮文本组合为同一个 user message。
 - Anthropic provider 继续直接使用相同的内部 URL source；base64 输入保持兼容。
 - 新增签名 URL 保真回归测试。

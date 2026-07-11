@@ -90,6 +90,28 @@ def test_engine_text_only_answer():
     assert result.messages[1]["role"] == "assistant"
 
 
+def test_engine_remote_images_are_part_of_current_user_input():
+    llm = _make_llm_mock([
+        LLMResponse(content=[{"type": "text", "text": "described"}]),
+    ])
+    eng = Engine(llm, [EchoTool()], permissions=PermissionChecker(auto_approve=True))
+    image_urls = [
+        "https://media.example/signed/one.png?token=one",
+        "https://media.example/signed/two.webp?token=two",
+    ]
+
+    result = eng.run("describe these", image_urls=image_urls)
+
+    assert result.messages[0] == {
+        "role": "user",
+        "content": [
+            {"type": "image", "source": {"type": "url", "url": image_urls[0]}},
+            {"type": "image", "source": {"type": "url", "url": image_urls[1]}},
+            {"type": "text", "text": "describe these"},
+        ],
+    }
+
+
 def test_engine_one_tool_then_text():
     llm = _make_llm_mock(
         [
