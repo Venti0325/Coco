@@ -11,7 +11,7 @@
 
 ## 2026-07-12
 
-- **(done)** 原生四档权限预设：Read Only / Ask for approval / Approve for me / Full access；Coco 核心使用 Codex 对齐的 sandbox/approval/reviewer 参数，并新增按需升级检测、宿主审批回调、模型 reviewer 和 Linux bubblewrap shell profile。432 passed, 4 skipped。→ [sessions/2026-07-12-permission-presets.md](sessions/2026-07-12-permission-presets.md)
+- **(done)** 原生四档权限预设：Read Only / Ask for approval / Approve for me / Full access；Coco 核心使用 Codex 对齐的 sandbox/approval/reviewer 参数，并新增按需升级检测（含 Git 与 side-effecting `gh` 操作）、宿主审批回调、模型 reviewer 和 Linux bubblewrap shell profile。432 passed, 4 skipped。→ [sessions/2026-07-12-permission-presets.md](sessions/2026-07-12-permission-presets.md)
 
 ## 2026-07-11
 

@@ -27,8 +27,9 @@
 
 - `PermissionChecker` 原生支持 `plan / edit / approveForMe / fullAccess`，并保留 `default / acceptEdits` 兼容模式。
 - `PermissionPreset` 与 `PermissionChecker` 使用 Codex 对齐的参数和值：`sandbox_mode`、`approval_policy`、`approvals_reviewer`；`approval_handler` 是宿主无关的同步回调，不包含 RoomTalk 协议。
+- 四个用户模式是三个参数的预设组合，不是四种 sandbox：Plan=`read-only/on-request/user`，Ask=`workspace-write/on-request/user`，Auto=`workspace-write/on-request/auto_review`，Full=`danger-full-access/never/user`。
 - `ModelPermissionReviewer` 使用 Coco 当前 LLM 判断 `allow / ask / deny`；工具参数会脱敏/摘要，异常和非法输出 fail-safe 为 `ask`。
 - `sandbox.py`、`ShellTool` 和 `BackgroundShellTool` 原生支持 Linux bubblewrap 的 `read-only / workspace-write / danger-full-access`；限制模式缺少 bubblewrap 时拒绝运行，不静默降级。
-- 内置工具原生声明 `requires_approval(arguments)`：普通 workspace 编辑/测试不触发审批，Git 元数据、受保护目录或系统级访问才进入 `user / auto_review`，调用时机与 Codex 的 on-request 一致。
+- 内置工具原生声明 `requires_approval(arguments)`：普通 workspace 编辑、测试和只读 `gh` 查询不触发审批；Git 元数据、受保护目录、系统级访问、side-effecting `gh` 子命令和写入型 `gh api` 才进入 `user / auto_review`，调用时机与 Codex 的 on-request 一致。
 - REPL 的 Shift+Tab 循环和 `/plan`、`/ask`、`/auto`、`/full-access` 已对齐四个预设。
 - 最终权限/工具定向测试 52 passed；完整测试 432 passed, 4 skipped。

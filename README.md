@@ -349,7 +349,7 @@ coco
 pytest tests/ -v
 ```
 
-CI 跑 Python 3.10 + 3.12 × Windows + Ubuntu 矩阵。当前 **402 tests passed**。
+CI 跑 Python 3.10 + 3.12 × Windows + Ubuntu 矩阵。当前 **432 passed, 4 skipped**。
 
 ---
 
@@ -361,7 +361,7 @@ src/core/
   config.py           – 分层配置（5 层合并）+ provider 自动探测
   context.py          – 运行时 system 提示拼装
   context_window.py   – 按模型推断 context window
-  commands.py         – 斜杠命令 + 三种 picker（session/model/skill）+ /plan /accept-edits /default
+  commands.py         – 斜杠命令 + 三种 picker（session/model/skill）+ /plan /ask /auto /full-access
   compact.py          – 三级 auto-compact 阈值（70% / 85%）+ LLM summary
   microcompact.py     – 选择性裁剪 Read/Glob/Grep/Shell 工具结果为占位符
   engine.py           – agent 工具循环 + _partition_tool_calls + ThreadPool 并行批
@@ -370,17 +370,19 @@ src/core/
   markdown.py         – markdown-it-py + 自写 format_token + token cache LRU 500
   streaming_markdown.py – 流式 markdown 块边界切分算法（StreamingMarkdownRenderer）
   session.py          – 会话 JSONL + meta（含 tool_time_ms/tokens_in/tokens_out）
-  permissions.py      – 模式化权限确认（default/acceptEdits/plan）
+  permissions.py      – Codex 对齐的四档权限预设、审批策略与 reviewer 路由
+  permission_reviewer.py – 使用当前 LLM 自动审查 eligible approval request
+  sandbox.py          – read-only/workspace-write/danger-full-access shell profile
   island.py           – 灵动岛悬浮窗（跨平台 backend：Tk/macOS/Null）
   mcp/                – MCP 客户端（client/adapter/manager/_bridge/config）
   paths.py            – 配置/数据/会话路径（XDG 风格，跨平台）
   models.py           – AppSettings/TokenUsage 等类型
   log.py              – Rich 控制台封装
   _keylistener.py     – ESC 中止监听（Windows msvcrt / Unix termios，非 TTY 自动 no-op）
-  tools/              – 各工具实现（shell.py 跨平台、Read/Glob/Grep 默认 is_concurrency_safe）
+  tools/              – 各工具实现、权限升级声明（含 Git 与 side-effecting gh 操作）
 benchmarks/           – Eval harness：run.py / harness.py / scorers.py / report.py + tasks/
 docs/                 – CLAUDE.md / changelog.md / sessions/<日期>-*.md / mcp.md
-tests/                – pytest（402 用例，Windows + Linux + macOS CI 三平台矩阵）
+tests/                – pytest（432 passed, 4 skipped；Windows + Linux + macOS CI 三平台矩阵）
 ```
 
 ---
