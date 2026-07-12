@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..sandbox import SandboxMode, sandbox_shell_command
 from .base import Tool, ToolOutcome, ToolSpec
 from .shell import _IS_WINDOWS, _is_dangerous, _truncate, looks_like_background_command
 
@@ -271,8 +272,9 @@ def summarize_background_jobs(*, max_jobs: int = 6, tail_chars: int = 1500) -> s
 
 
 class BackgroundShellTool(Tool):
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, *, sandbox_mode: SandboxMode = "danger-full-access"):
         self._workspace = workspace.resolve()
+        self._sandbox_mode = sandbox_mode
 
     @property
     def spec(self) -> ToolSpec:
@@ -378,6 +380,16 @@ class BackgroundShellTool(Tool):
             return ToolOutcome(success=False, content=error)
         assert cwd is not None
 
+        try:
+            sandboxed_command = sandbox_shell_command(
+                command,
+                cwd=cwd,
+                workspace=self._workspace,
+                mode=self._sandbox_mode,
+            )
+        except Exception as exc:
+            return ToolOutcome(success=False, content=f"Error: unable to start sandbox: {exc}")
+
         job_id = "bg_" + uuid.uuid4().hex[:12]
         ports = _normalize_ports(arguments.get("ports"))
         wait_ms = max(0, min(_coerce_int(arguments.get("wait_ms"), _DEFAULT_WAIT_MS), _MAX_WAIT_MS))
@@ -400,7 +412,7 @@ class BackgroundShellTool(Tool):
         _atomic_write_json(state_path, job)
         _atomic_write_json(request_path, {
             "jobId": job_id,
-            "command": command,
+            "command": sandboxed_command,
             "cwd": str(cwd),
             "logPath": job["logPath"],
             "statePath": str(state_path),

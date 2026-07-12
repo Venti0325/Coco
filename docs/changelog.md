@@ -11,7 +11,7 @@
 
 ## 2026-07-12
 
-- **(done)** 原生四档权限预设：Read Only / Ask for approval / Approve for me / Full access；Coco 核心新增宿主审批回调和模型 reviewer，宿主只负责选择模式与呈现审批。425 passed, 4 skipped。→ [sessions/2026-07-12-permission-presets.md](sessions/2026-07-12-permission-presets.md)
+- **(done)** 原生四档权限预设：Read Only / Ask for approval / Approve for me / Full access；Coco 核心新增宿主审批回调、模型 reviewer 和 Linux bubblewrap shell profile，宿主只负责选择模式与呈现审批。429 passed, 4 skipped。→ [sessions/2026-07-12-permission-presets.md](sessions/2026-07-12-permission-presets.md)
 
 ## 2026-07-11
 

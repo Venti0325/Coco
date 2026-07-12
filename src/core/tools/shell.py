@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..sandbox import SandboxMode, sandbox_shell_command
 from .base import Tool, ToolOutcome, ToolSpec
 
 _DEFAULT_TIMEOUT = 600
@@ -368,8 +369,9 @@ def _run_shell_command_posix(command: str, *, cwd: Path, timeout_s: int) -> tupl
 
 
 class ShellTool(Tool):
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, *, sandbox_mode: SandboxMode = "danger-full-access"):
         self._workspace = workspace.resolve()
+        self._sandbox_mode = sandbox_mode
 
     @property
     def spec(self) -> ToolSpec:
@@ -399,7 +401,7 @@ class ShellTool(Tool):
                 },
                 "required": ["command"],
             },
-            is_read_only=False,
+            is_read_only=self._sandbox_mode == "read-only",
         )
 
     def invoke(self, arguments: dict[str, Any]) -> ToolOutcome:
@@ -453,7 +455,13 @@ class ShellTool(Tool):
             cwd = p
 
         try:
-            returncode, stdout, stderr = _run_shell_command(command, cwd=cwd, timeout_s=timeout_s)
+            sandboxed_command = sandbox_shell_command(
+                command,
+                cwd=cwd,
+                workspace=self._workspace,
+                mode=self._sandbox_mode,
+            )
+            returncode, stdout, stderr = _run_shell_command(sandboxed_command, cwd=cwd, timeout_s=timeout_s)
             parts: list[str] = []
             out_text, out_trunc = _truncate(stdout.rstrip())
             err_text, err_trunc = _truncate(stderr.rstrip())
