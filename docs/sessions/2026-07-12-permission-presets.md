@@ -26,8 +26,8 @@
 ## Summary
 
 - `PermissionChecker` 原生支持 `plan / edit / approveForMe / fullAccess`，并保留 `default / acceptEdits` 兼容模式。
-- `PermissionPreset` 统一声明 sandbox 与 reviewer 契约；`approval_handler` 是宿主无关的同步回调，不包含 RoomTalk 协议。
+- `PermissionPreset` 与 `PermissionChecker` 使用 Codex 对齐的参数和值：`sandbox_mode`、`approval_policy`、`approvals_reviewer`；`approval_handler` 是宿主无关的同步回调，不包含 RoomTalk 协议。
 - `ModelPermissionReviewer` 使用 Coco 当前 LLM 判断 `allow / ask / deny`；工具参数会脱敏/摘要，异常和非法输出 fail-safe 为 `ask`。
 - `sandbox.py`、`ShellTool` 和 `BackgroundShellTool` 原生支持 Linux bubblewrap 的 `read-only / workspace-write / danger-full-access`；限制模式缺少 bubblewrap 时拒绝运行，不静默降级。
 - REPL 的 Shift+Tab 循环和 `/plan`、`/ask`、`/auto`、`/full-access` 已对齐四个预设。
-- 第一阶段定向测试 35 passed；最终完整测试 429 passed, 4 skipped。
+- 最终定向测试 39 passed；完整测试 430 passed, 4 skipped。

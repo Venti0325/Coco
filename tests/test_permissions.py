@@ -17,10 +17,26 @@ def test_read_only_tool_always_allowed():
 
 
 def test_permission_presets_define_all_four_execution_contracts():
-    assert permission_preset("plan").sandbox == "read-only"
+    assert permission_preset("plan").sandbox_mode == "read-only"
+    assert permission_preset("plan").approval_policy == "on-request"
     assert permission_preset("edit").approvals_reviewer == "user"
     assert permission_preset("approveForMe").approvals_reviewer == "auto_review"
-    assert permission_preset("fullAccess").sandbox == "danger-full-access"
+    assert permission_preset("fullAccess").sandbox_mode == "danger-full-access"
+    assert permission_preset("fullAccess").approval_policy == "never"
+
+
+def test_permission_checker_accepts_codex_aligned_parameters_directly():
+    checker = PermissionChecker(
+        mode="edit",
+        sandbox_mode="workspace-write",
+        approval_policy="on-request",
+        approvals_reviewer="auto_review",
+        reviewer=_Reviewer("allow"),
+    )
+    assert checker.sandbox_mode == "workspace-write"
+    assert checker.approval_policy == "on-request"
+    assert checker.approvals_reviewer == "auto_review"
+    assert checker.check(FileWriteTool(), {"file_path": "app.py"}) == "allow"
 
 
 def test_auto_approve_allows_write():

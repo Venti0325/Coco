@@ -25,28 +25,32 @@ if TYPE_CHECKING:
 
 PermissionDecision = Literal["allow", "deny"]
 PermissionMode = Literal["plan", "edit", "approveForMe", "fullAccess", "default", "acceptEdits"]
+SandboxMode = Literal["read-only", "workspace-write", "danger-full-access"]
+ApprovalPolicy = Literal["on-request", "never"]
+ApprovalsReviewer = Literal["user", "auto_review"]
 ApprovalHandler = Callable[[Tool, dict[str, Any], str | None], str]
 
 
 @dataclass(frozen=True, slots=True)
 class PermissionPreset:
     mode: PermissionMode
-    sandbox: Literal["read-only", "workspace-write", "danger-full-access"]
-    approvals_reviewer: Literal["user", "auto_review", "none"]
+    sandbox_mode: SandboxMode
+    approval_policy: ApprovalPolicy
+    approvals_reviewer: ApprovalsReviewer
 
 
 def permission_preset(mode: PermissionMode) -> PermissionPreset:
     """Return the complete execution contract for one user-facing mode."""
     if mode == "plan":
-        return PermissionPreset(mode, "read-only", "user")
+        return PermissionPreset(mode, "read-only", "on-request", "user")
     if mode in {"edit", "default"}:
-        return PermissionPreset(mode, "workspace-write", "user")
+        return PermissionPreset(mode, "workspace-write", "on-request", "user")
     if mode == "approveForMe":
-        return PermissionPreset(mode, "workspace-write", "auto_review")
+        return PermissionPreset(mode, "workspace-write", "on-request", "auto_review")
     if mode == "fullAccess":
-        return PermissionPreset(mode, "danger-full-access", "none")
+        return PermissionPreset(mode, "danger-full-access", "never", "user")
     # Legacy acceptEdits remains non-interactive but is still workspace-scoped.
-    return PermissionPreset(mode, "workspace-write", "none")
+    return PermissionPreset(mode, "workspace-write", "never", "user")
 
 
 class PermissionChecker:
@@ -58,11 +62,18 @@ class PermissionChecker:
         *,
         island=None,
         mode: PermissionMode = "default",
+        sandbox_mode: SandboxMode | None = None,
+        approval_policy: ApprovalPolicy | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
         reviewer: "PermissionReviewer | None" = None,
         approval_handler: ApprovalHandler | None = None,
     ) -> None:
         self._auto_approve = auto_approve
         self._mode: PermissionMode = mode
+        preset = permission_preset(mode)
+        self._sandbox_mode: SandboxMode = sandbox_mode or preset.sandbox_mode
+        self._approval_policy: ApprovalPolicy = approval_policy or preset.approval_policy
+        self._approvals_reviewer: ApprovalsReviewer = approvals_reviewer or preset.approvals_reviewer
         self._always_allow: set[str] = set()
         self._island = island
         self._reviewer = reviewer
@@ -75,24 +86,40 @@ class PermissionChecker:
     def mode(self) -> PermissionMode:
         return self._mode
 
+    @property
+    def sandbox_mode(self) -> SandboxMode:
+        return self._sandbox_mode
+
+    @property
+    def approval_policy(self) -> ApprovalPolicy:
+        return self._approval_policy
+
+    @property
+    def approvals_reviewer(self) -> ApprovalsReviewer:
+        return self._approvals_reviewer
+
     def set_mode(self, mode: PermissionMode) -> None:
         """REPL Shift+Tab / `/plan` 等命令切换模式时调用。"""
         self._mode = mode
+        preset = permission_preset(mode)
+        self._sandbox_mode = preset.sandbox_mode
+        self._approval_policy = preset.approval_policy
+        self._approvals_reviewer = preset.approvals_reviewer
 
     def check(self, tool: Tool, inputs: dict) -> PermissionDecision:
         if tool.is_read_only:
             return "allow"
-        # plan 模式：写工具兜底拒绝（理想情况下 engine 已经过滤掉了，根本不会调到）
-        if self._mode == "plan":
+        # read-only sandbox：写工具兜底拒绝（理想情况下 engine 已过滤掉）。
+        if self._sandbox_mode == "read-only":
             return "deny"
-        # Full access、acceptEdits 兼容模式或历史 --auto-approve flag → 直接放行
-        if self._mode in {"fullAccess", "acceptEdits"} or self._auto_approve:
+        # never policy 或历史 --auto-approve flag → 直接放行。
+        if self._approval_policy == "never" or self._auto_approve:
             return "allow"
         name = tool.spec.name
         if name in self._always_allow:
             return "allow"
         reviewer_reason: str | None = None
-        if self._mode == "approveForMe":
+        if self._approvals_reviewer == "auto_review":
             if self._reviewer is None:
                 reviewer_reason = "Automatic reviewer is unavailable."
             else:

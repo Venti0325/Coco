@@ -42,7 +42,7 @@ class ReplState:
     # 权限模式：plan / default / approveForMe / fullAccess，由 Shift+Tab 或 /plan
     # 等斜杠命令切换；底部 toolbar 显示，每轮 _run_query 前同步给
     # PermissionChecker.set_mode 与 engine.allowed_tools 过滤
-    permission_mode: str = "default"
+    permission_mode: str = "edit"
 
 
 @dataclass
@@ -970,7 +970,7 @@ def _cmd_accept_edits(ctx: CommandContext, args: str) -> None:
 def _cmd_default_mode(ctx: CommandContext, args: str) -> None:
     """切回 default 模式：写操作弹 y/n/always 终端确认。"""
     _ = args
-    _set_permission_mode(ctx, "default", "Ask for approval（需要额外权限时确认）")
+    _set_permission_mode(ctx, "edit", "Ask for approval（需要额外权限时确认）")
 
 
 def _cmd_approve_for_me(ctx: CommandContext, args: str) -> None:

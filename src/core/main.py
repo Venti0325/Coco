@@ -361,7 +361,7 @@ def _render_history_to_scrollback(
 # ── REPL 模式（与 PermissionChecker.mode 对齐） ───────────────────────
 
 # 模式名常量；ReplState.permission_mode 与 PermissionChecker.mode 共用同一组值。
-_MODE_DEFAULT = "default"
+_MODE_DEFAULT = "edit"
 _MODE_PLAN = "plan"
 _MODE_APPROVE_FOR_ME = "approveForMe"
 _MODE_FULL_ACCESS = "fullAccess"
