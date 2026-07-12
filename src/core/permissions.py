@@ -118,6 +118,8 @@ class PermissionChecker:
         name = tool.spec.name
         if name in self._always_allow:
             return "allow"
+        if not tool.requires_approval(inputs):
+            return "allow"
         reviewer_reason: str | None = None
         if self._approvals_reviewer == "auto_review":
             if self._reviewer is None:

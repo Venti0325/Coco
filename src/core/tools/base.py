@@ -59,3 +59,12 @@ class Tool(ABC):
     def is_concurrency_safe(self) -> bool:
         """是否可与同批并发安全调用；默认跟随 is_read_only。"""
         return self.spec.concurrency_safe
+
+    def requires_approval(self, arguments: dict[str, Any]) -> bool:
+        """Whether this call needs access beyond the active sandbox profile.
+
+        Third-party tools default to requesting approval for non-read-only calls.
+        Built-in workspace-aware tools override this for routine workspace work.
+        """
+        _ = arguments
+        return not self.is_read_only

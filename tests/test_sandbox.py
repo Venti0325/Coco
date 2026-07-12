@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from core.sandbox import sandbox_shell_argv
+from core.tools.file_write import FileWriteTool
 from core.tools.shell import ShellTool
 
 
@@ -45,3 +46,13 @@ def test_shell_tool_exposes_read_only_metadata_for_read_only_profile(tmp_path):
     assert ShellTool(tmp_path, sandbox_mode="read-only").is_read_only is True
     assert ShellTool(tmp_path, sandbox_mode="workspace-write").is_read_only is False
     assert ShellTool(tmp_path, sandbox_mode="danger-full-access").is_read_only is False
+
+
+def test_workspace_tools_only_request_approval_for_permission_escalation(tmp_path):
+    shell = ShellTool(tmp_path, sandbox_mode="workspace-write")
+    write = FileWriteTool()
+
+    assert shell.requires_approval({"command": "npm test"}) is False
+    assert shell.requires_approval({"command": "git add src/app.py"}) is True
+    assert write.requires_approval({"file_path": "src/app.py"}) is False
+    assert write.requires_approval({"file_path": ".git/config"}) is True

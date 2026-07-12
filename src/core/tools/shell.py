@@ -14,6 +14,7 @@ from typing import Any
 
 from ..sandbox import SandboxMode, sandbox_shell_command
 from .base import Tool, ToolOutcome, ToolSpec
+from .permission_scope import command_requests_elevated_workspace_access
 
 _DEFAULT_TIMEOUT = 600
 _MAX_OUTPUT_CHARS = 20_000
@@ -372,6 +373,11 @@ class ShellTool(Tool):
     def __init__(self, workspace: Path, *, sandbox_mode: SandboxMode = "danger-full-access"):
         self._workspace = workspace.resolve()
         self._sandbox_mode = sandbox_mode
+
+    def requires_approval(self, arguments: dict[str, Any]) -> bool:
+        if self._sandbox_mode != "workspace-write":
+            return False
+        return command_requests_elevated_workspace_access(arguments.get("command"))
 
     @property
     def spec(self) -> ToolSpec:

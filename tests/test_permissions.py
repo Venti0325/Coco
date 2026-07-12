@@ -36,7 +36,7 @@ def test_permission_checker_accepts_codex_aligned_parameters_directly():
     assert checker.sandbox_mode == "workspace-write"
     assert checker.approval_policy == "on-request"
     assert checker.approvals_reviewer == "auto_review"
-    assert checker.check(FileWriteTool(), {"file_path": "app.py"}) == "allow"
+    assert checker.check(FileWriteTool(), {"file_path": ".git/config"}) == "allow"
 
 
 def test_auto_approve_allows_write():
@@ -56,13 +56,13 @@ def test_auto_approve_allows_write():
 def test_write_prompt_allow():
     checker = PermissionChecker()
     with patch.object(checker, "_prompt", return_value="allow"):
-        assert checker.check(FileWriteTool(), {"file_path": "/x"}) == "allow"
+        assert checker.check(FileWriteTool(), {"file_path": ".git/config"}) == "allow"
 
 
 def test_write_prompt_deny():
     checker = PermissionChecker()
     with patch.object(checker, "_prompt", return_value="deny"):
-        assert checker.check(FileWriteTool(), {"file_path": "/x"}) == "deny"
+        assert checker.check(FileWriteTool(), {"file_path": ".git/config"}) == "deny"
 
 
 def test_whitelisted_tool_skips_prompt():
@@ -89,9 +89,9 @@ def test_approve_for_me_uses_model_reviewer_decision():
     deny = _Reviewer("deny")
     tool = FileWriteTool()
 
-    assert PermissionChecker(mode="approveForMe", reviewer=allow).check(tool, {"file_path": "app.py"}) == "allow"
-    assert PermissionChecker(mode="approveForMe", reviewer=deny).check(tool, {"file_path": "app.py"}) == "deny"
-    assert allow.calls == [("Write", {"file_path": "app.py"})]
+    assert PermissionChecker(mode="approveForMe", reviewer=allow).check(tool, {"file_path": ".git/config"}) == "allow"
+    assert PermissionChecker(mode="approveForMe", reviewer=deny).check(tool, {"file_path": ".git/config"}) == "deny"
+    assert allow.calls == [("Write", {"file_path": ".git/config"})]
 
 
 def test_approve_for_me_escalates_ask_to_host_approval_handler():
@@ -103,8 +103,8 @@ def test_approve_for_me_escalates_ask_to_host_approval_handler():
         return "accept"
 
     checker = PermissionChecker(mode="approveForMe", reviewer=reviewer, approval_handler=approve)
-    assert checker.check(FileWriteTool(), {"file_path": "app.py"}) == "allow"
-    assert calls == [("Write", {"file_path": "app.py"}, "external side effect")]
+    assert checker.check(FileWriteTool(), {"file_path": ".git/config"}) == "allow"
+    assert calls == [("Write", {"file_path": ".git/config"}, "external side effect")]
 
 
 def test_ask_mode_uses_host_approval_handler_and_full_access_skips_it():
@@ -116,8 +116,8 @@ def test_ask_mode_uses_host_approval_handler_and_full_access_skips_it():
 
     ask = PermissionChecker(mode="edit", approval_handler=approve)
     tool = FileWriteTool()
-    assert ask.check(tool, {"file_path": "a.py"}) == "allow"
-    assert ask.check(tool, {"file_path": "b.py"}) == "allow"
+    assert ask.check(tool, {"file_path": ".git/config"}) == "allow"
+    assert ask.check(tool, {"file_path": ".git/index"}) == "allow"
     assert len(calls) == 1
 
     full = PermissionChecker(mode="fullAccess", approval_handler=lambda *_args: "decline")
@@ -130,5 +130,15 @@ def test_approve_for_me_without_reviewer_fails_safe_to_host_approval():
         mode="approveForMe",
         approval_handler=lambda _tool, _inputs, reason: reasons.append(reason) or "decline",
     )
-    assert checker.check(FileWriteTool(), {"file_path": "app.py"}) == "deny"
+    assert checker.check(FileWriteTool(), {"file_path": ".git/config"}) == "deny"
     assert reasons == ["Automatic reviewer is unavailable."]
+
+
+def test_workspace_routine_edits_do_not_request_approval():
+    calls = []
+    checker = PermissionChecker(
+        mode="edit",
+        approval_handler=lambda *_args: calls.append(_args) or "decline",
+    )
+    assert checker.check(FileWriteTool(), {"file_path": "src/app.py"}) == "allow"
+    assert calls == []

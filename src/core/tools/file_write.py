@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .base import Tool, ToolOutcome, ToolSpec
+from .permission_scope import path_targets_protected_workspace_metadata
 
 
 def _fail(message: str) -> ToolOutcome:
@@ -14,6 +15,9 @@ def _fail(message: str) -> ToolOutcome:
 
 class FileWriteTool(Tool):
     """创建或覆盖文件；父目录不存在时自动创建。"""
+
+    def requires_approval(self, arguments: dict[str, Any]) -> bool:
+        return path_targets_protected_workspace_metadata(arguments.get("file_path"))
 
     @property
     def spec(self) -> ToolSpec:

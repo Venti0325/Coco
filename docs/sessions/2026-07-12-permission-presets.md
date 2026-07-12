@@ -29,5 +29,6 @@
 - `PermissionPreset` 与 `PermissionChecker` 使用 Codex 对齐的参数和值：`sandbox_mode`、`approval_policy`、`approvals_reviewer`；`approval_handler` 是宿主无关的同步回调，不包含 RoomTalk 协议。
 - `ModelPermissionReviewer` 使用 Coco 当前 LLM 判断 `allow / ask / deny`；工具参数会脱敏/摘要，异常和非法输出 fail-safe 为 `ask`。
 - `sandbox.py`、`ShellTool` 和 `BackgroundShellTool` 原生支持 Linux bubblewrap 的 `read-only / workspace-write / danger-full-access`；限制模式缺少 bubblewrap 时拒绝运行，不静默降级。
+- 内置工具原生声明 `requires_approval(arguments)`：普通 workspace 编辑/测试不触发审批，Git 元数据、受保护目录或系统级访问才进入 `user / auto_review`，调用时机与 Codex 的 on-request 一致。
 - REPL 的 Shift+Tab 循环和 `/plan`、`/ask`、`/auto`、`/full-access` 已对齐四个预设。
-- 最终定向测试 39 passed；完整测试 430 passed, 4 skipped。
+- 最终权限/工具定向测试 52 passed；完整测试 432 passed, 4 skipped。
