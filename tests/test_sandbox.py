@@ -54,5 +54,9 @@ def test_workspace_tools_only_request_approval_for_permission_escalation(tmp_pat
 
     assert shell.requires_approval({"command": "npm test"}) is False
     assert shell.requires_approval({"command": "git add src/app.py"}) is True
+    assert shell.requires_approval({"command": "gh pr view 42"}) is False
+    assert shell.requires_approval({"command": "gh pr create --fill"}) is True
+    assert shell.requires_approval({"command": "gh api repos/acme/demo"}) is False
+    assert shell.requires_approval({"command": "gh api repos/acme/demo/issues -f title=bug"}) is True
     assert write.requires_approval({"file_path": "src/app.py"}) is False
     assert write.requires_approval({"file_path": ".git/config"}) is True
