@@ -2,21 +2,51 @@
 
 模式系统（与 Shift+Tab REPL 循环对齐）：
 
-- ``default`` —— 写工具弹 y/n/always 终端确认（原行为）
-- ``acceptEdits`` —— 写工具自动放行（无确认）
-- ``plan`` —— 写工具一律拒绝；通常配合 engine 的 allowed_tools 过滤一起用，
+- ``plan`` —— Read Only，写工具一律拒绝
+- ``edit`` / ``default`` —— Ask for approval，需要额外权限时由宿主/终端确认
+- ``approveForMe`` —— 先交给模型 reviewer；reviewer 可放行、拒绝或升级给用户
+- ``fullAccess`` —— Full access，非只读工具直接放行
+- ``acceptEdits`` —— 旧版兼容别名，保持原来的自动放行行为
+
+Plan 通常配合 engine 的 allowed_tools 过滤一起用，
   让 LLM 根本看不到 Write/Edit/Shell，本层只是兜底防御
 """
 
 from __future__ import annotations
 
-from typing import Callable, Literal
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from . import log
 from .tools.base import Tool
 
+if TYPE_CHECKING:
+    from .permission_reviewer import PermissionReviewer
+
 PermissionDecision = Literal["allow", "deny"]
-PermissionMode = Literal["default", "acceptEdits", "plan"]
+PermissionMode = Literal["plan", "edit", "approveForMe", "fullAccess", "default", "acceptEdits"]
+ApprovalHandler = Callable[[Tool, dict[str, Any], str | None], str]
+
+
+@dataclass(frozen=True, slots=True)
+class PermissionPreset:
+    mode: PermissionMode
+    sandbox: Literal["read-only", "workspace-write", "danger-full-access"]
+    approvals_reviewer: Literal["user", "auto_review", "none"]
+
+
+def permission_preset(mode: PermissionMode) -> PermissionPreset:
+    """Return the complete execution contract for one user-facing mode."""
+    if mode == "plan":
+        return PermissionPreset(mode, "read-only", "user")
+    if mode in {"edit", "default"}:
+        return PermissionPreset(mode, "workspace-write", "user")
+    if mode == "approveForMe":
+        return PermissionPreset(mode, "workspace-write", "auto_review")
+    if mode == "fullAccess":
+        return PermissionPreset(mode, "danger-full-access", "none")
+    # Legacy acceptEdits remains non-interactive but is still workspace-scoped.
+    return PermissionPreset(mode, "workspace-write", "none")
 
 
 class PermissionChecker:
@@ -28,11 +58,15 @@ class PermissionChecker:
         *,
         island=None,
         mode: PermissionMode = "default",
+        reviewer: "PermissionReviewer | None" = None,
+        approval_handler: ApprovalHandler | None = None,
     ) -> None:
         self._auto_approve = auto_approve
         self._mode: PermissionMode = mode
         self._always_allow: set[str] = set()
         self._island = island
+        self._reviewer = reviewer
+        self._approval_handler = approval_handler
         # EscListener 在请求期间会设置这两个钩子，防止 msvcrt 偷走 input() 按键
         self.pause_fn: Callable[[], None] | None = None
         self.resume_fn: Callable[[], None] | None = None
@@ -51,15 +85,41 @@ class PermissionChecker:
         # plan 模式：写工具兜底拒绝（理想情况下 engine 已经过滤掉了，根本不会调到）
         if self._mode == "plan":
             return "deny"
-        # acceptEdits 模式 / 历史 --auto-approve flag → 直接放行
-        if self._mode == "acceptEdits" or self._auto_approve:
+        # Full access、acceptEdits 兼容模式或历史 --auto-approve flag → 直接放行
+        if self._mode in {"fullAccess", "acceptEdits"} or self._auto_approve:
             return "allow"
         name = tool.spec.name
         if name in self._always_allow:
             return "allow"
-        return self._prompt(tool, inputs)
+        reviewer_reason: str | None = None
+        if self._mode == "approveForMe":
+            if self._reviewer is None:
+                reviewer_reason = "Automatic reviewer is unavailable."
+            else:
+                review = self._reviewer.review(tool, inputs)
+                reviewer_reason = review.reason or None
+                if review.decision == "allow":
+                    return "allow"
+                if review.decision == "deny":
+                    return "deny"
+        return self._prompt(tool, inputs, reviewer_reason=reviewer_reason)
 
-    def _prompt(self, tool: Tool, inputs: dict) -> PermissionDecision:
+    def _prompt(
+        self,
+        tool: Tool,
+        inputs: dict,
+        *,
+        reviewer_reason: str | None = None,
+    ) -> PermissionDecision:
+        if self._approval_handler is not None:
+            try:
+                choice = self._approval_handler(tool, inputs, reviewer_reason)
+                decision = self._decision_from_choice(tool.spec.name, choice)
+                if decision is not None:
+                    return decision
+            except Exception:
+                return "deny"
+
         # Prefer GUI permission dialog if DynamicIsland is available.
         island = self._island
         try:
@@ -76,6 +136,8 @@ class PermissionChecker:
             pass
 
         log.warn(f"需要确认非只读工具: {tool.spec.name}")
+        if reviewer_reason:
+            log.dim(f"  自动审查：{reviewer_reason}")
         if tool.spec.name in {"Shell", "BackgroundShell"}:
             cmd = str(inputs.get("command", "") or "")
             try:
@@ -111,3 +173,14 @@ class PermissionChecker:
         finally:
             if self.resume_fn:
                 self.resume_fn()
+
+    def _decision_from_choice(self, tool_name: str, choice: str) -> PermissionDecision | None:
+        normalized = str(choice or "").strip()
+        if normalized in {"allow", "accept", "y", "yes"}:
+            return "allow"
+        if normalized in {"always", "acceptForSession", "a"}:
+            self._always_allow.add(tool_name)
+            return "allow"
+        if normalized in {"deny", "decline", "cancel", "n", "no"}:
+            return "deny"
+        return None

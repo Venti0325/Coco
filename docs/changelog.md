@@ -9,6 +9,10 @@
 
 ---
 
+## 2026-07-12
+
+- **(done)** 原生四档权限预设：Read Only / Ask for approval / Approve for me / Full access；Coco 核心新增宿主审批回调和模型 reviewer，宿主只负责选择模式与呈现审批。425 passed, 4 skipped。→ [sessions/2026-07-12-permission-presets.md](sessions/2026-07-12-permission-presets.md)
+
 ## 2026-07-11
 
 - **(done)** 远程图片 URL 输入：`Engine.run(..., image_urls=[...])` 将图片与本轮文本组合为同一个 user message；统一 image block 支持 `source: {type: "url", url: ...}`，OpenAI-compatible provider 转为原生 `image_url`，Anthropic provider 沿用内部 URL source，不下载图片、不转 base64，并保留原有 base64 兼容。→ [sessions/2026-07-11-image-url-input.md](sessions/2026-07-11-image-url-input.md)

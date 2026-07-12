@@ -39,7 +39,7 @@ class ReplState:
     post_run_callback: Callable[[], None] | None = None  # 下一轮 run 结束后执行
     # 跨轮累计 token 用量——用于 auto-compact 决策与 REPL 水位显示。
     session_usage: TokenUsage = field(default_factory=TokenUsage)
-    # 权限模式："default" / "acceptEdits" / "plan"，由 Shift+Tab 或 /plan
+    # 权限模式：plan / default / approveForMe / fullAccess，由 Shift+Tab 或 /plan
     # 等斜杠命令切换；底部 toolbar 显示，每轮 _run_query 前同步给
     # PermissionChecker.set_mode 与 engine.allowed_tools 过滤
     permission_mode: str = "default"
@@ -958,7 +958,7 @@ def _set_permission_mode(ctx: CommandContext, mode: str, label: str) -> None:
 def _cmd_plan(ctx: CommandContext, args: str) -> None:
     """切到 plan 模式：禁止所有写操作，agent 只能读取/搜索。"""
     _ = args
-    _set_permission_mode(ctx, "plan", "plan（只读，禁止编辑）")
+    _set_permission_mode(ctx, "plan", "Read Only（只读）")
 
 
 def _cmd_accept_edits(ctx: CommandContext, args: str) -> None:
@@ -970,7 +970,19 @@ def _cmd_accept_edits(ctx: CommandContext, args: str) -> None:
 def _cmd_default_mode(ctx: CommandContext, args: str) -> None:
     """切回 default 模式：写操作弹 y/n/always 终端确认。"""
     _ = args
-    _set_permission_mode(ctx, "default", "default（写操作需确认）")
+    _set_permission_mode(ctx, "default", "Ask for approval（需要额外权限时确认）")
+
+
+def _cmd_approve_for_me(ctx: CommandContext, args: str) -> None:
+    """切到 Approve for me：由模型 reviewer 自动审查，必要时再询问。"""
+    _ = args
+    _set_permission_mode(ctx, "approveForMe", "Approve for me（自动审查）")
+
+
+def _cmd_full_access(ctx: CommandContext, args: str) -> None:
+    """切到 Full access：非只读工具不再请求批准。"""
+    _ = args
+    _set_permission_mode(ctx, "fullAccess", "Full access（无需批准）")
 
 
 _COMMAND_HELP: list[tuple[str, str]] = [
@@ -984,9 +996,10 @@ _COMMAND_HELP: list[tuple[str, str]] = [
     ("compact", "压缩对话上下文：/compact 或 /compact --micro（仅裁剪早期工具结果）"),
     ("skills", "列出可用技能"),
     ("mcp", "MCP server 状态与工具列表"),
-    ("plan", "进入 plan 模式（只读，禁止编辑）；Shift+Tab 也可循环切换"),
-    ("accept-edits", "进入 accept-edits 模式（自动放行写操作）"),
-    ("default", "回到 default 模式（写操作需确认）"),
+    ("plan", "Read Only：只读；Shift+Tab 也可循环切换"),
+    ("ask", "Ask for approval：需要额外权限时确认"),
+    ("auto", "Approve for me：模型自动审查，必要时询问"),
+    ("full-access", "Full access：无需批准"),
     ("workspace 或 cd", "切换工作区：/workspace <路径>"),
     ("exit 或 quit", "退出 REPL"),
 ]
@@ -1007,6 +1020,10 @@ _COMMANDS: dict[str, CommandHandler] = {
     "accept-edits": _cmd_accept_edits,
     "acceptedits": _cmd_accept_edits,  # 兼容无连字符写法
     "default": _cmd_default_mode,
+    "ask": _cmd_default_mode,
+    "auto": _cmd_approve_for_me,
+    "approve-for-me": _cmd_approve_for_me,
+    "full-access": _cmd_full_access,
     "workspace": _cmd_workspace,
     "ws": _cmd_workspace,
     "cd": _cmd_workspace,

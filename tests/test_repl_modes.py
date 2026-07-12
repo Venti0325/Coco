@@ -14,7 +14,9 @@ import pytest
 
 from core.main import (
     _MODE_ACCEPT_EDITS,
+    _MODE_APPROVE_FOR_ME,
     _MODE_DEFAULT,
+    _MODE_FULL_ACCESS,
     _MODE_PLAN,
     _MODE_CYCLE,
     _PLAN_MODE_ALLOWED_TOOLS,
@@ -28,12 +30,16 @@ from core.tools.base import Tool, ToolSpec
 # ── _next_mode 循环 ──────────────────────────────────────────────────
 
 
-def test_next_mode_default_to_accept_edits():
-    assert _next_mode(_MODE_DEFAULT) == _MODE_ACCEPT_EDITS
+def test_next_mode_ask_to_approve_for_me():
+    assert _next_mode(_MODE_DEFAULT) == _MODE_APPROVE_FOR_ME
 
 
-def test_next_mode_accept_edits_to_plan():
-    assert _next_mode(_MODE_ACCEPT_EDITS) == _MODE_PLAN
+def test_next_mode_approve_for_me_to_full_access():
+    assert _next_mode(_MODE_APPROVE_FOR_ME) == _MODE_FULL_ACCESS
+
+
+def test_next_mode_full_access_to_plan():
+    assert _next_mode(_MODE_FULL_ACCESS) == _MODE_PLAN
 
 
 def test_next_mode_plan_back_to_default():
@@ -45,7 +51,7 @@ def test_next_mode_unknown_falls_back_to_default():
     assert _next_mode("nonexistent") == _MODE_DEFAULT
 
 
-def test_mode_cycle_visits_all_three():
+def test_mode_cycle_visits_all_four():
     """完整循环一圈应当回到起点。"""
     seen = []
     cur = _MODE_DEFAULT
@@ -72,8 +78,15 @@ def test_toolbar_accept_edits_has_hint():
     text = _mode_toolbar_text(_MODE_ACCEPT_EDITS)
     assert text is not None
     flat = "".join(s for _, s in text)
-    assert "accept edits" in flat
+    assert "approve for me" in flat
     assert "shift+tab" in flat.lower()
+
+
+def test_toolbar_approve_for_me_and_full_access_have_hints():
+    auto = "".join(s for _, s in (_mode_toolbar_text(_MODE_APPROVE_FOR_ME) or []))
+    full = "".join(s for _, s in (_mode_toolbar_text(_MODE_FULL_ACCESS) or []))
+    assert "approve for me" in auto
+    assert "full access" in full
 
 
 def test_toolbar_plan_has_hint():
@@ -193,6 +206,18 @@ def test_slash_plan_command_switches_mode(tmp_path: Path):
     assert state.permission_mode == _MODE_ACCEPT_EDITS
 
     rc = dispatch_slash(ctx, "/default")
+    assert rc == "handled"
+    assert state.permission_mode == _MODE_DEFAULT
+
+    rc = dispatch_slash(ctx, "/auto")
+    assert rc == "handled"
+    assert state.permission_mode == _MODE_APPROVE_FOR_ME
+
+    rc = dispatch_slash(ctx, "/full-access")
+    assert rc == "handled"
+    assert state.permission_mode == _MODE_FULL_ACCESS
+
+    rc = dispatch_slash(ctx, "/ask")
     assert rc == "handled"
     assert state.permission_mode == _MODE_DEFAULT
 

@@ -41,6 +41,7 @@ from core.engine import Engine
 from core.session import SessionStore
 from core.llm import LLMClient
 from core.permissions import PermissionChecker
+from core.permission_reviewer import ModelPermissionReviewer
 from core.island import DynamicIsland
 from core.tools import (
     BackgroundShellTool,
@@ -361,11 +362,18 @@ def _render_history_to_scrollback(
 
 # 模式名常量；ReplState.permission_mode 与 PermissionChecker.mode 共用同一组值。
 _MODE_DEFAULT = "default"
-_MODE_ACCEPT_EDITS = "acceptEdits"
 _MODE_PLAN = "plan"
+_MODE_APPROVE_FOR_ME = "approveForMe"
+_MODE_FULL_ACCESS = "fullAccess"
+_MODE_ACCEPT_EDITS = "acceptEdits"  # legacy alias; not part of the visible cycle
 
-# Shift+Tab 循环顺序：default → acceptEdits → plan → default ...
-_MODE_CYCLE: tuple[str, ...] = (_MODE_DEFAULT, _MODE_ACCEPT_EDITS, _MODE_PLAN)
+# Shift+Tab 循环顺序与 Codex 一致：Ask → Auto → Full → Read → Ask ...
+_MODE_CYCLE: tuple[str, ...] = (
+    _MODE_DEFAULT,
+    _MODE_APPROVE_FOR_ME,
+    _MODE_FULL_ACCESS,
+    _MODE_PLAN,
+)
 
 # Plan 模式下允许的工具集（只读核心三件套；MCP 工具默认全屏蔽，需要的话以后
 # 用 tool.is_read_only 改为运行时过滤）
@@ -392,8 +400,11 @@ def _mode_toolbar_text(mode: str) -> list[tuple[str, str]] | None:
     返回 prompt_toolkit FormattedText 兼容格式 `[(style, text), ...]`，或 None
     表示不显示 toolbar。
     """
-    if mode == _MODE_ACCEPT_EDITS:
-        return [("fg:ansimagenta", "▸▸ accept edits on "),
+    if mode in {_MODE_ACCEPT_EDITS, _MODE_APPROVE_FOR_ME}:
+        return [("fg:ansimagenta", "▸▸ approve for me "),
+                ("fg:ansibrightblack", "(shift+tab to cycle)")]
+    if mode == _MODE_FULL_ACCESS:
+        return [("fg:ansired", "▸▸ full access "),
                 ("fg:ansibrightblack", "(shift+tab to cycle)")]
     if mode == _MODE_PLAN:
         return [("fg:ansicyan", "▸▸ plan mode "),
@@ -795,7 +806,11 @@ def entry() -> None:
     log.info("")
 
     island = DynamicIsland().start()
-    perms = PermissionChecker(auto_approve=args.auto_approve, island=island)
+    perms = PermissionChecker(
+        auto_approve=args.auto_approve,
+        island=island,
+        reviewer=ModelPermissionReviewer(client),
+    )
 
     # Skills：先注册内置技能，再加载磁盘技能，最后注入可用技能列表到 system prompt。
     register_bundled_skills()
